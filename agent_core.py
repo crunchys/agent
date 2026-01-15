@@ -213,9 +213,11 @@ class ThoughtGenerator:
             top_p=0.95,
         )
 
-        generated = output_ids[0][inputs["input_ids"].shape[-1]:]
-        text = self.tokenizer.decode(generated, skip_special_tokens=True)
+        input_len = inputs["input_ids"].size(1)
+        generated = output_ids[:, input_len:]  # сохраняем все батчи (обычно 1)
+        generated = generated[0]  # берём первый батч
 
+        text = self.tokenizer.decode(generated, skip_special_tokens=True)
         if "<END_THOUGHT>" in text:
             text = text.split("<END_THOUGHT>")[0].strip()
 
