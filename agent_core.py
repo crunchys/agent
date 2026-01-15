@@ -289,27 +289,25 @@ class ResponseGenerator:
         text = self.tokenizer.decode(output_ids[0], skip_special_tokens=True)
 
         # --- ЧИСТКА ВЫВОДА ---
+        text = self._strip_thoughts(text)
 
-        # убираем промпт, если он протёк
-        if prompt in text:
-            text = text.replace(prompt, "").strip()
+        for meta in [
+            "добавь",
+            "нужно",
+            "следует",
+            "формат",
+            "мысли внутри",
+            "внутри головы",
+        ]:
+            if meta in text.lower():
+                text = (
+                    "Если честно, мне интересно, как ты сам воспринимаешь "
+                    "наш разговор. Зачем ты его продолжаешь?"
+                )
+                break
 
-        # убираем маркеры
-        for bad in ["<END>", "<END_THOUGHT>"]:
-            if bad in text:
-                text = text.split(bad)[0].strip()
-
-        # убираем дубли
-        lines = [l.strip() for l in text.split("\n") if l.strip()]
-        if len(lines) > 1:
-            text = lines[0]
-
-        # финальная зачистка
-        text = text.strip(" :\n\t")
-
-        # если после чистки ответ пустой — разрешаем агенту задать вопрос
-        if not text:
-            text = "Мне интересно узнать о тебе немного больше. Почему ты решил задать этот вопрос?"
+        if "<END>" in text:
+            text = text.split("<END>")[0].strip()
 
         return text
 
