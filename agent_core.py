@@ -181,47 +181,45 @@ class ThoughtGenerator:
 
         contrast_text = ""
         if contrast_signal:
-            contrast_text = (
-                "Ранее я думал иначе, и теперь внутри есть такое противоречие.\n"
-            )
+            contrast_text = "Ранее я думал иначе, и сейчас это вызывает внутреннее противоречие.\n"
 
-        user_prompt = (
+        prompt_text = (
+            f"{self.system_prompt}\n"
             f"Фокус: {focus}\n"
             f"Состояние: {affect_desc}\n"
             f"Любопытство: {curiosity:.2f}\n"
             f"{contrast_text}"
             f"Прошлые события: {events_summary}\n"
             f"Черты личности: {self_model.traits}\n"
-            f"Ошибка предсказания: {prediction_error:.2f}"
+            f"Ошибка предсказания: {prediction_error:.2f}\n"
+            "Мысль агента: "
         )
 
-        messages = [
-            {"role": "system", "content": self.system_prompt},
-            {"role": "user", "content": user_prompt},
-        ]
+        # токенизация
+        enc = self.tokenizer(prompt_text, return_tensors="pt").to(self.model.device)
 
-        inputs = self.tokenizer.apply_chat_template(
-            messages, add_generation_prompt=True, return_tensors="pt", padding=True
-        ).to(self.model.device)
-
+        # генерация
         output_ids = self.model.generate(
-            inputs["input_ids"],
-            attention_mask=inputs["attention_mask"],
+            **enc,
             max_new_tokens=150,
             do_sample=True,
             temperature=1.0,
-            top_p=0.95,
+            top_p=0.95
         )
 
-        input_len = inputs["input_ids"].size(1)
-        generated = output_ids[:, input_len:]  # сохраняем все батчи (обычно 1)
-        generated = generated[0]  # берём первый батч
+        # декодируем весь вывод целиком
+        text = self.tokenizer.decode(output_ids[0], skip_special_tokens=True)
 
-        text = self.tokenizer.decode(generated, skip_special_tokens=True)
+        # если случайно промпт повторился, удаляем его
+        if prompt_text in text:
+            text = text.replace(prompt_text, "").strip()
+
+        # отрезаем до <END_THOUGHT>
         if "<END_THOUGHT>" in text:
             text = text.split("<END_THOUGHT>")[0].strip()
 
         return text + " <END_THOUGHT>"
+
 
 # ======================================================
 # Response Generator
