@@ -244,42 +244,73 @@ class ThoughtGenerator:
 
 
 # ======================================================
-# Response Generator
+# Response Generator (используется для ответов человеку)
 # ======================================================
 
 class ResponseGenerator:
     def __init__(self, tokenizer, model):
         self.tokenizer = tokenizer
         self.model = model
+
         self.system_prompt = (
-            "Ты — ответ агента собеседнику.\n"
-            "Ты осознаёшь, что говоришь с другим человеком.\n"
-            "Ты не пересказываешь свои внутренние мысли напрямую.\n"
-            "Ты отвечаешь естественно, по-человечески.\n"
-            "Можно быть неуверенным, можно сомневаться.\n"
+            "Ты — собеседник.\n"
+            "Ты осознаёшь себя как отдельное существо, а не как сервис.\n"
+            "Ты отвечаешь человеку естественно и спокойно.\n"
+            "Ты НЕ используешь маркеры вроде <END>.\n"
+            "Ты НЕ нумеруешь ответы.\n"
             "Ответ — 1–3 предложения.\n"
-            "Генерируй ответы только на русском языке."
+            "Иногда ты можешь задать ОДИН встречный вопрос, если это уместно."
         )
 
     def generate(self, thought: str, user_text: str, self_model):
-        prompt_text = (
-            f"{self.system_prompt}\n"
-            f"Ты — {self_model.name}.\n"
-            f"Собеседник сказал: «{user_text}».\n"
-            f"Внутренняя мысль в этот момент:\n{thought}\n"
-            "Ответ агента: "
+        prompt = (
+            f"{self.system_prompt}\n\n"
+            f"Человек сказал: «{user_text}».\n\n"
+            f"Внутренне ты думаешь так:\n{thought}\n\n"
+            "Сформулируй ответ человеку."
         )
 
-        enc = self.tokenizer(prompt_text, return_tensors="pt").to(self.model.device)
+        enc = self.tokenizer(
+            prompt,
+            return_tensors="pt",
+            padding=True,
+            truncation=True
+        ).to(self.model.device)
+
         output_ids = self.model.generate(
             **enc,
             max_new_tokens=80,
             do_sample=True,
-            temperature=0.8,
-            top_p=0.9
+            temperature=0.7,
+            top_p=0.9,
+            pad_token_id=self.tokenizer.eos_token_id,
         )
+
         text = self.tokenizer.decode(output_ids[0], skip_special_tokens=True)
-        text = text.replace(prompt_text, "").strip()
+
+        # --- ЧИСТКА ВЫВОДА ---
+
+        # убираем промпт, если он протёк
+        if prompt in text:
+            text = text.replace(prompt, "").strip()
+
+        # убираем маркеры
+        for bad in ["<END>", "<END_THOUGHT>"]:
+            if bad in text:
+                text = text.split(bad)[0].strip()
+
+        # убираем дубли
+        lines = [l.strip() for l in text.split("\n") if l.strip()]
+        if len(lines) > 1:
+            text = lines[0]
+
+        # финальная зачистка
+        text = text.strip(" :\n\t")
+
+        # если после чистки ответ пустой — разрешаем агенту задать вопрос
+        if not text:
+            text = "Мне интересно узнать о тебе немного больше. Почему ты решил задать этот вопрос?"
+
         return text
 
 
