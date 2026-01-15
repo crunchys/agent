@@ -1,43 +1,72 @@
 import json
+import os
 from typing import List, Dict
 
 class PersistentMemory:
-    def __init__(self, filename="memory.json"):
-        self.filename = filename
+    """
+    Простая файловая память для агента:
+    - Загружает события из JSON при инициализации
+    - Сохраняет на диск после каждого изменения
+    - Предоставляет методы store() и recent()
+    """
+
+    def __init__(self, path: str = "memory.json", autosave: bool = True):
+        self.path = path
+        self.autosave = autosave
         self.events: List[Dict] = []
-        self.world: Dict[str, Dict] = {}
+        self._load_from_file()
 
-    # ====== Episodic Memory ======
-    def store_event(self, event: Dict):
+    def _load_from_file(self):
+        """Попытка загрузить память из файла, если он существует."""
+        try:
+            if os.path.exists(self.path):
+                with open(self.path, "r", encoding="utf‑8") as f:
+                    data = json.load(f)
+                    if isinstance(data, list):
+                        self.events = data
+                    else:
+                        self.events = []
+            else:
+                self.events = []
+        except Exception as e:
+            print(f"⚠️ Не удалось загрузить память из {self.path}: {e}")
+            self.events = []
+
+    def _save_to_file(self):
+        """Сохранение текущей памяти в файл JSON."""
+        try:
+            with open(self.path, "w", encoding="utf‑8") as f:
+                json.dump(self.events, f, ensure_ascii=False, indent=2)
+        except Exception as e:
+            print(f"⚠️ Ошибка при сохранении памяти в {self.path}: {e}")
+
+    def store(self, event: Dict):
+        """Сохранить новое событие памяти."""
         self.events.append(event)
+        if self.autosave:
+            self._save_to_file()
 
-    def recent_events(self, n=5):
+    def recent(self, n: int = 5) -> List[Dict]:
+        """
+        Вернуть последние n событий памяти.
+        Если событий меньше, вернуть все.
+        """
         return self.events[-n:]
 
-    # ====== World Model ======
-    def update_object(self, name: str, properties: Dict = None, relations: Dict = None):
-        if name not in self.world:
-            self.world[name] = {"properties": {}, "relations": {}}
-        if properties:
-            self.world[name]["properties"].update(properties)
-        if relations:
-            self.world[name]["relations"].update(relations)
+    def all(self) -> List[Dict]:
+        """Вернуть всю память (для отладки или анализа)."""
+        return self.events
 
-    def get_object(self, name: str):
-        return self.world.get(name, {"properties": {}, "relations": {}})
+    def clear(self):
+        """Очистить память и сохранить пустой файл."""
+        self.events = []
+        if self.autosave:
+            self._save_to_file()
 
-    # ====== Save / Load ======
     def save(self):
-        data = {"events": self.events, "world": self.world}
-        with open(self.filename, "w", encoding="utf-8") as f:
-            json.dump(data, f, ensure_ascii=False, indent=2)
+        """Вручную сохранить память в файл."""
+        self._save_to_file()
 
     def load(self):
-        try:
-            with open(self.filename, "r", encoding="utf-8") as f:
-                data = json.load(f)
-            self.events = data.get("events", [])
-            self.world = data.get("world", {})
-        except FileNotFoundError:
-            self.events = []
-            self.world = {}
+        """Вручную перезагрузить память из файла (заменяет текущую)."""
+        self._load_from_file()
