@@ -4,9 +4,11 @@ from inputimeout import inputimeout, TimeoutOccurred
 from typing import Optional, List, Dict
 import random
 from collections import Counter
+
 import torch
 from transformers import AutoTokenizer, Qwen2ForCausalLM
-from agent_memory import PersistentMemory  # <=== подключаем память
+
+from agent_memory import PersistentMemory  # 📌 память из отдельного файла
 
 # ======================================================
 # Mental State
@@ -52,8 +54,10 @@ class PredictionErrorSystem:
     def compute(self, stimulus: Dict) -> float:
         content = stimulus["content"]
         self.history[content] += 1
+
         total = sum(self.history.values())
         freq = self.history[content] / total if total > 0 else 0.0
+
         prediction_error = 1.0 - freq
         return round(prediction_error, 3)
 
@@ -72,25 +76,6 @@ class AttentionSystem:
         return best["content"] if best["salience"] >= self.threshold else None
 
 # ======================================================
-# Meta Reflection
-# ======================================================
-
-class MetaReflection:
-    def __init__(self, window: int = 5):
-        self.window = window
-
-    def reflect(self, memory: PersistentMemory) -> Optional[Dict]:
-        recent = [e for e in memory.events if e["type"] == "experience"][-self.window:]
-        if len(recent) < self.window:
-            return None
-        return {
-            "type": "meta_reflection",
-            "time": round(time(), 2),
-            "avg_arousal": round(sum(e["arousal"] for e in recent) / self.window, 3),
-            "avg_valence": round(sum(e["valence"] for e in recent) / self.window, 3),
-        }
-
-# ======================================================
 # Self Model
 # ======================================================
 
@@ -107,9 +92,10 @@ class SelfModel:
             self.goals = []
 
     def reflect(self, state: MentalState, memory: PersistentMemory):
-        recent = memory.recent(5)
-        avg_valence = sum(e['valence'] for e in recent)/len(recent) if recent else 0
-        self.traits['любопытство'] = min(1.0, max(0.0, 0.5 + avg_valence*0.5))
+        recent = memory.recent_events(5)
+        if recent:
+            avg_valence = sum(e['valence'] for e in recent) / len(recent)
+            self.traits['любопытство'] = min(1.0, max(0.0, 0.5 + avg_valence * 0.5))
 
 # ======================================================
 # Future Expectation System
@@ -133,8 +119,7 @@ class FutureExpectationSystem:
 
     def curiosity(self, content: str):
         exp = self.predict(content)
-        surprise = 1.0 - exp['prob']
-        return surprise
+        return 1.0 - exp['prob']
 
 # ======================================================
 # Thought Generator
@@ -147,122 +132,67 @@ class ThoughtGenerator:
         self.model = Qwen2ForCausalLM.from_pretrained(
             model_name, token=hf_token, device_map="auto", torch_dtype=torch.float16
         )
+
         self.system_prompt = (
-            "Ты — внутренняя мысль агента, возникающая сама по себе.\n"
-            "Это не отчёт и не объяснение, а поток размышлений:\n"
-            "— с сомнениями,\n"
-            "— с оглядкой на прошлый опыт,\n"
-            "— с попыткой понять, что происходит и почему.\n"
-            "Ты можешь:\n"
-            "— сравнивать текущее состояние с предыдущими,\n"
-            "— колебаться в выводах,\n"
-            "— признавать, что что-то пока неясно.\n"
-            "Стиль — живая внутренняя речь, естественные фразы.\n"
-            "Мысль должна быть законченной, без обрыва.\n"
-            "Длина — 3–5 предложений.\n"
-            "Не используй формулировки:\n"
-            "«мне нужно», «я должен», «следует», «необходимо».\n"
-            "В конце обязательно добавь <END_THOUGHT>."
+            "Ты — внутренняя мысль агента, поток размышлений.\n"
+            "Это не отчёт и не объяснение, а живой внутренний диалог с сомнениями,\n"
+            "с опорой на прошлый опыт и попыткой понять, что происходит.\n"
+            "Мысль — законченная, 3–5 предложений.\n"
+            "В конце обязательно добавь <END_THOUGHT>.\n"
+            "Не используй формулы: «мне нужно», «я должен», «следует», «необходимо»."
         )
 
     def describe_affect(self, arousal: float, valence: float) -> str:
-        if arousal < 0.2: arousal_desc = "спокойно"
-        elif arousal < 0.5: arousal_desc = "настороженно"
-        elif arousal < 0.8: arousal_desc = "активно"
-        else: arousal_desc = "взволнованно"
+        if arousal < 0.2:
+            arousal_desc = "спокойно"
+        elif arousal < 0.5:
+            arousal_desc = "настороженно"
+        elif arousal < 0.8:
+            arousal_desc = "активно"
+        else:
+            arousal_desc = "взволнованно"
 
-        if valence < -0.5: valence_desc = "печально"
-        elif valence < 0.0: valence_desc = "тревожно"
-        elif valence < 0.5: valence_desc = "нейтрально"
-        else: valence_desc = "радостно"
+        if valence < -0.5:
+            valence_desc = "печально"
+        elif valence < 0.0:
+            valence_desc = "тревожно"
+        elif valence < 0.5:
+            valence_desc = "нейтрально"
+        else:
+            valence_desc = "радостно"
 
         return f"{arousal_desc}, {valence_desc}"
 
-    def interpret_situation(self, focus, prediction_error, last_events):
-        if not focus:
-            return "происходящее пока не складывается в чёткую картину"
-        if prediction_error > 0.6:
-            return f"это ощущается как что-то неожиданное вокруг «{focus}»"
-        if len(last_events) >= 2 and last_events[-1]["focus"] == last_events[-2]["focus"]:
-            return f"кажется, «{focus}» повторяется и тянет за собой похожие состояния"
-        return f"«{focus}» выглядит обыденно, но не совсем пусто"
-
     def generate_thought(
-            self,
-            focus,
-            arousal,
-            valence,
-            prediction_error,
-            last_events,
-            self_model,
-            curiosity,
-            contrast_signal=None
-        ):
+        self,
+        focus,
+        arousal,
+        valence,
+        prediction_error,
+        last_events,
+        self_model,
+        curiosity,
+        contrast_signal=None
+    ):
         events_summary = ", ".join(
-            f"{e['focus']} (а:{e['arousal']:.2f}, v:{e['valence']:.2f})" for e in last_events
+            f"{e['focus']} (v:{e['valence']:.2f})" for e in last_events
         )
         affect_desc = self.describe_affect(arousal, valence)
 
         contrast_text = ""
         if contrast_signal:
-            contrast_text = "Ранее по этому поводу возникала другая мысль, и сейчас это ощущается как внутреннее расхождение.\n"
-
-        situation_view = self.interpret_situation(focus, prediction_error, last_events)
+            contrast_text = (
+                "Ранее я думал иначе, и теперь внутри есть такое противоречие.\n"
+            )
 
         user_prompt = (
-            f"Сейчас происходящее можно описать так: {situation_view}\n"
-            f"Сейчас внимание удерживается на: {focus}\n"
-            f"Общее состояние ощущается как: {affect_desc}\n"
-            f"Любопытство на этом фоне — примерно {curiosity:.2f}\n"
+            f"Фокус: {focus}\n"
+            f"Состояние: {affect_desc}\n"
+            f"Любопытство: {curiosity:.2f}\n"
             f"{contrast_text}"
-            f"Ранее похожие состояния сопровождались такими событиями: {events_summary}\n"
-            f"Черты личности сейчас проявляются так: {self_model.traits}\n"
-            f"Есть ощущение, что ожидания не совсем совпали с происходящим (ошибка предсказания ≈ {prediction_error:.2f})"
-        )
-
-        messages = [{"role": "system", "content": self.system_prompt},
-                    {"role": "user", "content": user_prompt}]
-
-        inputs = self.tokenizer.apply_chat_template(
-            messages, add_generation_prompt=True, return_tensors="pt", padding=True
-        ).to(self.model.device)
-
-        input_ids = inputs["input_ids"]
-        attention_mask = inputs["attention_mask"]
-
-        output_ids = self.model.generate(
-            input_ids, attention_mask=attention_mask, max_new_tokens=150,
-            do_sample=True, temperature=1.0, top_p=0.95
-        )
-        generated = output_ids[0][input_ids.shape[-1]:]
-        text = self.tokenizer.decode(generated, skip_special_tokens=True)
-        if "<END_THOUGHT>" in text:
-            text = text.split("<END_THOUGHT>")[0].strip()
-        return text + " <END_THOUGHT>"
-
-# ======================================================
-# Response Generator (Speech)
-# ======================================================
-
-class ResponseGenerator:
-    def __init__(self, tokenizer, model):
-        self.tokenizer = tokenizer
-        self.model = model
-        self.system_prompt = (
-            "Ты — ответ агента собеседнику.\n"
-            "Ты осознаёшь, что говоришь с другим человеком.\n"
-            "Ты не пересказываешь свои внутренние мысли напрямую.\n"
-            "Ты отвечаешь естественно, по-человечески.\n"
-            "Можно быть неуверенным, можно сомневаться.\n"
-            "Ответ — 1–3 предложения."
-        )
-
-    def generate(self, thought: str, user_text: str, self_model):
-        user_prompt = (
-            f"Ты — {self_model.name}.\n"
-            f"Собеседник сказал: «{user_text}».\n\n"
-            f"Твоя внутренняя мысль в этот момент:\n{thought}\n\n"
-            "Сформулируй ответ собеседнику."
+            f"Прошлые события: {events_summary}\n"
+            f"Черты личности: {self_model.traits}\n"
+            f"Ошибка предсказания: {prediction_error:.2f}"
         )
 
         messages = [
@@ -270,21 +200,69 @@ class ResponseGenerator:
             {"role": "user", "content": user_prompt},
         ]
 
-        input_ids = self.tokenizer.apply_chat_template(
-            messages,
-            add_generation_prompt=True,
-            return_tensors="pt"
+        inputs = self.tokenizer.apply_chat_template(
+            messages, add_generation_prompt=True, return_tensors="pt", padding=True
         ).to(self.model.device)
 
         output_ids = self.model.generate(
-            input_ids,
+            inputs["input_ids"],
+            attention_mask=inputs["attention_mask"],
+            max_new_tokens=150,
+            do_sample=True,
+            temperature=1.0,
+            top_p=0.95,
+        )
+
+        generated = output_ids[0][inputs["input_ids"].shape[-1]:]
+        text = self.tokenizer.decode(generated, skip_special_tokens=True)
+
+        if "<END_THOUGHT>" in text:
+            text = text.split("<END_THOUGHT>")[0].strip()
+
+        return text + " <END_THOUGHT>"
+
+# ======================================================
+# Response Generator
+# ======================================================
+
+class ResponseGenerator:
+    def __init__(self, tokenizer, model):
+        self.tokenizer = tokenizer
+        self.model = model
+
+        self.system_prompt = (
+            "Ты — ответ агента собеседнику.\n"
+            "Отвечай естественно, по‑человечески.\n"
+            "Можно усомниться, можно уточнять.\n"
+            "Ответ — 1–3 предложения."
+        )
+
+    def generate(self, thought, user_text, self_model):
+        user_prompt = (
+            f"Ты — {self_model.name}.\n"
+            f"Собеседник сказал: «{user_text}».\n"
+            f"Твоя внутренняя мысль:\n{thought}\n"
+            "Сформулируй ответ."
+        )
+
+        messages = [
+            {"role": "system", "content": self.system_prompt},
+            {"role": "user", "content": user_prompt},
+        ]
+
+        inputs = self.tokenizer.apply_chat_template(
+            messages, add_generation_prompt=True, return_tensors="pt", padding=True
+        ).to(self.model.device)
+
+        output_ids = self.model.generate(
+            inputs["input_ids"],
             max_new_tokens=80,
             do_sample=True,
             temperature=0.8,
             top_p=0.9,
         )
 
-        generated = output_ids[0][input_ids.shape[-1]:]
+        generated = output_ids[0][inputs["input_ids"].shape[-1]:]
         return self.tokenizer.decode(generated, skip_special_tokens=True)
 
 # ======================================================
@@ -298,16 +276,14 @@ class Agent:
         self.attention = AttentionSystem()
         self.prediction = PredictionErrorSystem()
         self.memory = PersistentMemory("memory.json")
-        self.memory.load()  # <=== подгружаем память и мир
-        self.meta = MetaReflection()
+        self.memory.load()  # 🧠 загружаем старую память
         self.thought_gen = ThoughtGenerator()
         self.response_gen = ResponseGenerator(
-            self.thought_gen.tokenizer,
-            self.thought_gen.model
+            self.thought_gen.tokenizer, self.thought_gen.model
         )
         self.self_model = SelfModel()
         self.future = FutureExpectationSystem()
-        self.last_thought: Optional[str] = None
+        self.last_thought = None
 
     def step(self, stimuli: List[Dict]):
         prediction_errors = []
@@ -317,27 +293,29 @@ class Agent:
             pe = self.prediction.compute(s)
             s["prediction_error"] = pe
             prediction_errors.append(pe)
+
             s["salience"] += pe * 0.5
             s["intensity"] += pe * 0.3
-            self.state = self.emotion.apply_stimulus(self.state, s)
-            self.future.update(s['content'], s['valence'], s['intensity'])
-            curiosity += self.future.curiosity(s['content'])
 
-            # обновляем память о пользователе
+            self.state = self.emotion.apply_stimulus(self.state, s)
+            self.future.update(s["content"], s["valence"], s["intensity"])
+            curiosity += self.future.curiosity(s["content"])
+
             if s.get("type") == "interaction":
                 self.memory.update_object(
                     "пользователь",
-                    properties={"last_message": s["content"], "timestamp": time()}
+                    properties={"last_message": s["content"], "time": time()},
                 )
 
         curiosity /= len(stimuli) if stimuli else 1
-        self.state.arousal = min(1.0, self.state.arousal + curiosity*0.2)
+        self.state.arousal = min(1.0, self.state.arousal + curiosity * 0.2)
 
         self.state.focus = self.attention.select_focus(stimuli)
         self.state = self.emotion.decay(self.state)
         self.state.timestamp = time()
 
-        self.memory.store({
+        # сохраняем опыт
+        self.memory.store_event({
             "type": "experience",
             "time": round(self.state.timestamp, 2),
             "focus": self.state.focus,
@@ -346,14 +324,14 @@ class Agent:
             "prediction_error": prediction_errors[0] if prediction_errors else 0.0,
         })
 
-        # обновляем память о себе
         self.memory.update_object(
             "агент",
-            properties={"last_focus": self.state.focus, "arousal": self.state.arousal, "valence": self.state.valence}
+            properties={"last_focus": self.state.focus, "arousal": self.state.arousal, "valence": self.state.valence},
         )
 
         self.self_model.reflect(self.state, self.memory)
-        last_five = self.memory.recent(5)
+        last_five = self.memory.recent_events(5)
+
         trend_valence = "нейтральный"
         if len(last_five) >= 2:
             delta = last_five[-1]["valence"] - last_five[0]["valence"]
@@ -361,32 +339,31 @@ class Agent:
 
         contrast_signal = None
         if self.last_thought and len(last_five) >= 2:
-            valence_shift = last_five[-1]["valence"] - last_five[-2]["valence"]
-            if abs(valence_shift) > 0.2:
-                contrast_signal = {"previous_thought": self.last_thought, "valence_shift": round(valence_shift, 2)}
+            shift = last_five[-1]["valence"] - last_five[-2]["valence"]
+            if abs(shift) > 0.2:
+                contrast_signal = {"previous_thought": self.last_thought, "valence_shift": round(shift, 2)}
 
         thought = self.thought_gen.generate_thought(
-            self.state.focus, self.state.arousal, self.state.valence,
+            self.state.focus,
+            self.state.arousal,
+            self.state.valence,
             prediction_errors[0] if prediction_errors else 0.0,
-            last_five, self.self_model, curiosity,
-            contrast_signal
+            last_five,
+            self.self_model,
+            curiosity,
+            contrast_signal,
         )
 
         print("\n💭 Мысль агента:", thought)
 
-        # === Ответ собеседнику (если было обращение) ===
         for s in stimuli:
             if s.get("type") == "interaction":
-                reply = self.response_gen.generate(
-                    thought,
-                    s["content"],
-                    self.self_model
-                )
+                reply = self.response_gen.generate(thought, s["content"], self.self_model)
                 print("🗣 Ответ агента:", reply)
 
         print(f"  [Тренд валентности последних 5 событий: {trend_valence}]\n")
         self.last_thought = thought
-        self.memory.save()  # <=== сохраняем память после каждого шага
+        self.memory.save()  # 📤 сохраняем память
 
 # ======================================================
 # Simulation
@@ -394,18 +371,17 @@ class Agent:
 
 def run_interactive_simulation(steps: int = 100, timeout: int = 60):
     agent = Agent()
-    
-    print("💬 Начинаем диалог с агентом. Пиши сообщение или просто жди — агент будет размышлять сам.")
-    
+    print("💬 Пиши сообщение или жди — агент продолжает размышлять.")
+
     for _ in range(steps):
         try:
             user_input = inputimeout(prompt="Ты: ", timeout=timeout).strip()
         except TimeoutOccurred:
-            user_input = ""  # если не ввел текст в течение timeout → пустой ввод
-        
+            user_input = ""
+
         stimuli = []
 
-        if user_input:  # пользователь ввел текст → добавляем как стимул
+        if user_input:
             stimuli.append({
                 "type": "interaction",
                 "content": user_input,
@@ -413,7 +389,7 @@ def run_interactive_simulation(steps: int = 100, timeout: int = 60):
                 "intensity": 0.4,
                 "valence": 0.0,
             })
-        else:  # пустой ввод или таймаут → генерируем случайное событие
+        else:
             stimuli.append({
                 "type": "random",
                 "content": random.choice(["мысль", "шум", "воспоминание"]),
@@ -421,9 +397,9 @@ def run_interactive_simulation(steps: int = 100, timeout: int = 60):
                 "intensity": 0.3,
                 "valence": random.uniform(-0.2, 0.2),
             })
-        
+
         agent.step(stimuli)
-        sleep(0.5)  # небольшая пауза между шагами
+        sleep(0.5)
 
 if __name__ == "__main__":
     run_interactive_simulation()
