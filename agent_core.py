@@ -342,7 +342,7 @@ class Agent:
         self.memory = PersistentMemory("memory.json")
         self.meta = MetaReflection()
         self.thought_gen = ThoughtGenerator()
-        self.response_gen = ResponseGenerator(self.thought_gen)
+        self.response_gen = ResponseGenerator()
         self.self_model = SelfModel()
         self.future = FutureExpectationSystem()
         self.last_thought: Optional[str] = None
