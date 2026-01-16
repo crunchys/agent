@@ -347,6 +347,40 @@ class Agent:
         self.future = FutureExpectationSystem()
         self.last_thought: Optional[str] = None
 
+    def generate_initiative(self) -> Dict[str, float | str]:
+        """
+        Создаёт осознанную инициативу агента, основанную
+        на текущем состоянии, памяти и любопытстве.
+        """
+
+        # 1. Получаем контекст: последние события
+        last_events = self.memory.recent(5)
+        last_focuses = [e["focus"] for e in last_events if e.get("focus")]
+
+        # 2. Определяем тему инициативы
+        if not last_focuses:
+            topic = "о своём происхождении"
+        else:
+            # если есть фокус, возможно анализировать его
+            # или перейти к следующей теме
+            topic = random.choice(last_focuses)
+
+        # 3. Формулируем текст инициативы
+        # Можно усложнить с помощью LLM позже
+        initiative_text = (
+            f"Агент интересуется: хочу подумать подробнее {topic}, "
+            "чтобы лучше понять свой прошлый опыт и его значение."
+        )
+
+        # 4. Сальенс и валентность делают инициирование заметным
+        return {
+            "type": "initiative",
+            "content": initiative_text,
+            "salience": 0.8 + random.uniform(0.0, 0.1),
+            "intensity": 0.4 + random.uniform(0.0, 0.2),
+            "valence": random.uniform(-0.1, 0.1),
+        }
+
     def step(self, stimuli: List[Dict]):
         prediction_errors = []
         curiosity = 0.0
@@ -436,13 +470,7 @@ def run_interactive_simulation(steps: int = 100, timeout: int = 60):
                 "valence": 0.0,
             })
         else:
-            stimuli.append({
-                "type": "random",
-                "content": random.choice(["мысль", "шум", "воспоминание"]),
-                "salience": random.random(),
-                "intensity": 0.3,
-                "valence": random.uniform(-0.2, 0.2),
-            })
+            stimuli.append(Agent.generate_initiative())
 
         agent.step(stimuli)
         sleep(0.5)
