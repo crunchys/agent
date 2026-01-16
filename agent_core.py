@@ -450,18 +450,27 @@ class Agent:
 # Simulation
 # ======================================================
 
-def run_interactive_simulation(steps: int = 100, timeout: int = 60):
+def run_interactive_simulation(timeout: int = 60):
     agent = Agent()
-    print("💬 Пиши сообщение или жди — агент продолжает размышлять.")
-    for _ in range(steps):
+
+    print("\n💬 Пиши сообщение или жди — агент продолжает размышлять (ввод не обязателен).")
+    print("   Чтобы завершить, напиши 'exit' или 'quit'.\n")
+
+    while True:
         try:
             user_input = inputimeout(prompt="Ты: ", timeout=timeout).strip()
         except TimeoutOccurred:
-            user_input = ""  # если таймаут
+            user_input = ""
+
+        # проверка на выход
+        if user_input.lower() in {"exit", "quit"}:
+            print("Завершение симуляции.")
+            break
 
         stimuli = []
 
         if user_input:
+            # если пользователь ввёл текст
             stimuli.append({
                 "type": "interaction",
                 "content": user_input,
@@ -470,10 +479,10 @@ def run_interactive_simulation(steps: int = 100, timeout: int = 60):
                 "valence": 0.0,
             })
         else:
-            stimuli.append(Agent.generate_initiative())
+            # если таймаут — агент проявляет инициативу
+            stimuli.append(agent.generate_initiative())
 
         agent.step(stimuli)
-        sleep(0.5)
 
 
 if __name__ == "__main__":
