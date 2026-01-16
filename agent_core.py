@@ -7,6 +7,8 @@ from collections import Counter
 import torch
 from transformers import AutoTokenizer, AutoModelForCausalLM
 from agent_memory import PersistentMemory  # твой модуль с памятью
+import faiss
+from sentence_transformers import SentenceTransformer
 import warnings
 
 # Отключаем предупреждения
@@ -27,13 +29,11 @@ def load_model_and_tokenizer(model_name="Qwen/Qwen2.5-3B-Instruct", hf_token=Non
     print(f"🔄 Загрузка модели: {model_name}")
     
     try:
-        # Для CPU используем float16, чтобы сэкономить память (float32 требует ~12GB RAM для 3B модели)
-        dtype = torch.bfloat16 if torch.cuda.is_available() else torch.float16  # На CPU float16 работает, но медленно
+        dtype = torch.bfloat16 if torch.cuda.is_available() else torch.float16
         device = "cuda" if torch.cuda.is_available() else "cpu"
 
         print(f"   • Устройство: {device}")
         print(f"   • Тип данных: {dtype}")
-        print("   • Совет: Если у тебя GPU, убедись, что torch установлен с CUDA. На CPU модель может требовать 6–8GB RAM в float16.")
 
         _TOKENIZER = AutoTokenizer.from_pretrained(
             model_name,
@@ -57,11 +57,33 @@ def load_model_and_tokenizer(model_name="Qwen/Qwen2.5-3B-Instruct", hf_token=Non
     except Exception as e:
         print("\n!!! Ошибка при загрузке модели !!!")
         print(e)
-        if "out of memory" in str(e).lower():
-            print("Вероятная причина: Недостаточно памяти. Попробуй dtype=torch.float16 или квантизацию (если на GPU).")
         raise
 
     return _MODEL, _TOKENIZER
+
+
+# ======================================================
+# Vector Memory (Faiss-based)
+# ======================================================
+
+class VectorMemory:
+    def __init__(self, embedding_model="all-MiniLM-L6-v2"):
+        self.embedder = SentenceTransformer(embedding_model)
+        self.dimension = self.embedder.get_sentence_embedding_dimension()
+        self.index = faiss.IndexFlatL2(self.dimension)
+        self.events = []  # Храним оригинальные события
+
+    def add_event(self, event):
+        text = f"Фокус: {event.get('focus', '')}. Мысль: {event.get('thought', '')}. Arousal: {event.get('arousal', 0)}, Valence: {event.get('valence', 0)}."
+        emb = self.embedder.encode(text)
+        self.index.add(emb.reshape(1, -1))
+        self.events.append(event)
+
+    def search(self, query, k=3):
+        emb = self.embedder.encode(query)
+        _, indices = self.index.search(emb.reshape(1, -1), k)
+        valid_indices = [i for i in indices[0] if i != -1 and i < len(self.events)]
+        return [self.events[i] for i in valid_indices]
 
 
 # ======================================================
@@ -150,22 +172,47 @@ class EpisodicMemory:
 
 
 # ======================================================
-# Meta Reflection
+# Meta Reflection (расширенная рефлексивная память)
 # ======================================================
 
 class MetaReflection:
-    def __init__(self, window: int = 5):
+    def __init__(self, window: int = 5, model=None, tokenizer=None):
         self.window = window
+        self.model = model
+        self.tokenizer = tokenizer
 
     def reflect(self, memory: EpisodicMemory) -> Optional[Dict]:
         recent = [e for e in memory.events if e["type"] == "experience"][-self.window:]
         if len(recent) < self.window:
             return None
+        
+        avg_arousal = sum(e["arousal"] for e in recent) / self.window
+        avg_valence = sum(e["valence"] for e in recent) / self.window
+        
+        # LLM для извлечения урока
+        events_summary = ", ".join(f"{e['focus']} (a:{e['arousal']:.2f}, v:{e['valence']:.2f}, thought:{e['thought'][:50]}...)" for e in recent)
+        prompt = (
+            "Анализируй эти события и извлеки ключевой урок или абстракцию: "
+            f"{events_summary}. "
+            "Урок должен быть кратким: 1-2 предложения на русском. "
+            "Начни с 'Из этого я понял, что...'."
+        )
+        inputs = self.tokenizer(prompt, return_tensors="pt").to(self.model.device)
+        output_ids = self.model.generate(
+            **inputs,
+            max_new_tokens=100,
+            do_sample=True,
+            temperature=0.8,
+            top_p=0.9
+        )
+        lesson = self.tokenizer.decode(output_ids[0], skip_special_tokens=True).replace(prompt, "").strip()
+        
         return {
             "type": "meta_reflection",
             "time": round(time(), 2),
-            "avg_arousal": round(sum(e["arousal"] for e in recent) / self.window, 3),
-            "avg_valence": round(sum(e["valence"] for e in recent) / self.window, 3),
+            "avg_arousal": round(avg_arousal, 3),
+            "avg_valence": round(avg_valence, 3),
+            "lesson": lesson
         }
 
 
@@ -178,17 +225,26 @@ class SelfModel:
     name: str = "Агент"
     traits: Dict[str, float] = None
     goals: List[str] = None
+    lessons: List[str] = None  # Новый список для хранения уроков
 
     def __post_init__(self):
         if self.traits is None:
             self.traits = {'смелость': 0.5, 'любопытство': 0.5}
         if self.goals is None:
             self.goals = []
+        if self.lessons is None:
+            self.lessons = []
 
-    def reflect(self, state: MentalState, memory: EpisodicMemory):
+    def reflect(self, state: MentalState, memory: EpisodicMemory, new_lesson: Optional[str] = None):
         recent = memory.recent(5)
         avg_valence = sum(e['valence'] for e in recent)/len(recent) if recent else 0
         self.traits['любопытство'] = min(1.0, max(0.0, 0.5 + avg_valence*0.5))
+        
+        if new_lesson:
+            self.lessons.append(new_lesson)
+            # Обновляем traits на основе урока (пример: если урок негативный - уменьшаем смелость)
+            if "ошиб" in new_lesson.lower() or "неудач" in new_lesson.lower():
+                self.traits['смелость'] = max(0.0, self.traits['смелость'] - 0.1)
 
 
 # ======================================================
@@ -256,7 +312,7 @@ class ThoughtGenerator:
 
         return f"{arousal_desc}, {valence_desc}"
 
-    def generate_thought(self, focus, arousal, valence, prediction_error, last_events, self_model, curiosity, contrast_signal=None):
+    def generate_thought(self, focus, arousal, valence, prediction_error, last_events, self_model, curiosity, vector_memory, contrast_signal=None):
         events_summary = ", ".join(
             f"{e['focus']} (a:{e['arousal']:.2f}, v:{e['valence']:.2f})" for e in last_events
         )
@@ -266,6 +322,13 @@ class ThoughtGenerator:
             contrast_text = (
                 "Ранее по этому поводу возникала другая мысль, и сейчас это ощущается как внутреннее расхождение.\n"
             )
+        
+        # Поиск релевантных воспоминаний
+        query = f"Фокус: {focus}. Состояние: {affect_desc}."
+        relevant_memories = vector_memory.search(query, k=3)
+        memories_summary = ", ".join(
+            f"{m.get('focus', '')} (thought: {m.get('thought', '')[:30]}...)" for m in relevant_memories
+        ) if relevant_memories else "Нет релевантных воспоминаний."
 
         prompt_text = (
             f"{self.system_prompt}\n"
@@ -274,6 +337,7 @@ class ThoughtGenerator:
             f"Любопытство: {curiosity:.2f}\n"
             f"{contrast_text}"
             f"Прошлые события: {events_summary}\n"
+            f"Релевантные воспоминания: {memories_summary}\n"
             f"Черты личности: {self_model.traits}\n"
             f"Ошибка предсказания: {prediction_error:.2f}\n"
             "Мысль агента: "
@@ -326,16 +390,14 @@ class ResponseGenerator:
             {"role": "user",   "content": user_prompt},
         ]
 
-        # ←←← ИСПРАВЛЕНИЕ ЗДЕСЬ ←←←
         inputs = self.tokenizer.apply_chat_template(
             messages,
             add_generation_prompt=True,
-            return_tensors="pt",
-            return_dict=True          # ← КЛЮЧЕВОЕ ДОБАВЛЕНИЕ
+            return_tensors="pt"
         ).to(self.model.device)
 
         output_ids = self.model.generate(
-            **inputs,                         # ← Упрощённо и надёжно
+            inputs,
             max_new_tokens=120,
             do_sample=True,
             temperature=0.7,
@@ -345,7 +407,7 @@ class ResponseGenerator:
         )
 
         # Декодируем только сгенерированную часть
-        generated_tokens = output_ids[0][inputs["input_ids"].shape[1]:]
+        generated_tokens = output_ids[0][inputs.shape[1]:]
         text = self.tokenizer.decode(generated_tokens, skip_special_tokens=True).strip()
 
         # Очистка
@@ -369,17 +431,18 @@ class ResponseGenerator:
 
 class Agent:
     def __init__(self, hf_token=None):
-        # Загружаем модель один раз здесь
+        # Загружаем модель один раз
         model, tokenizer = load_model_and_tokenizer(hf_token=hf_token)
         
         self.state = MentalState.initial()
         self.emotion = EmotionSystem()
         self.attention = AttentionSystem()
         self.prediction = PredictionErrorSystem()
-        self.memory = PersistentMemory("memory.json")
-        self.meta = MetaReflection()
-        self.thought_gen = ThoughtGenerator(model, tokenizer)
-        self.response_gen = ResponseGenerator(model, tokenizer)
+        self.memory = PersistentMemory("memory.json")  # Эпизодическая память
+        self.vector_memory = VectorMemory()  # Векторная память (Faiss)
+        self.meta = MetaReflection(model=model, tokenizer=tokenizer)
+        self.thought_gen = ThoughtGenerator(model=model, tokenizer=tokenizer)
+        self.response_gen = ResponseGenerator(model=model, tokenizer=tokenizer)
         self.self_model = SelfModel()
         self.future = FutureExpectationSystem()
         self.last_thought: Optional[str] = None
@@ -413,6 +476,7 @@ class Agent:
             last_events,
             self.self_model,
             avg_curiosity,
+            self.vector_memory  # Передаем vector_memory для поиска
         )
 
         event = {
@@ -427,10 +491,12 @@ class Agent:
         }
 
         self.memory.store(event)
+        self.vector_memory.add_event(event)  # Добавляем в векторную память
 
         meta_ref = self.meta.reflect(self.memory)
         if meta_ref:
             self.memory.store(meta_ref)
+            self.self_model.reflect(self.state, self.memory, new_lesson=meta_ref.get("lesson"))
 
         self.self_model.reflect(self.state, self.memory)
 
@@ -450,6 +516,39 @@ class Agent:
         response = self.response_gen.generate(self.last_thought, user_text, self.self_model)
         return response
 
+    def generate_initiative(self) -> Dict[str, float | str]:
+        """
+        Создаёт осознанную инициативу агента, основанную
+        на текущем состоянии, памяти и любопытстве.
+        """
+
+        # 1. Получаем контекст: последние события
+        last_events = self.memory.recent(5)
+        last_focuses = [e["focus"] for e in last_events if e.get("focus")]
+
+        # 2. Определяем любопытство и фокус
+        if not last_focuses:
+            focus = "самоанализ"
+        else:
+            focus = random.choice(last_focuses)  # Или более умно выбрать
+
+        stimuli = [{
+            "content": "Внутренняя инициатива",
+            "intensity": random.uniform(0.1, 0.3),
+            "valence": random.uniform(-0.1, 0.1),
+            "salience": random.uniform(0.4, 0.6),
+        }]
+
+        thought = self.step(stimuli)
+
+        # Генерируем "инициативный" ответ (как будто пользователь спросил "что дальше?")
+        initiative_response = self.respond("Что ты думаешь дальше?")
+
+        return {
+            "thought": thought,
+            "response": initiative_response
+        }
+
 
 # ======================================================
 # Main Loop (пример использования)
@@ -465,8 +564,9 @@ if __name__ == "__main__":
             user_input = inputimeout(prompt="Вы: ", timeout=60)
         except TimeoutOccurred:
             print("Таймаут. Генерирую спонтанную мысль...")
-            thought = agent.step([])  # Стимули без ввода
-            print(f"Мысль агента: {thought}")
+            initiative = agent.generate_initiative()
+            print(f"Мысль агента: {initiative['thought']}")
+            print(f"Агент (инициатива): {initiative['response']}")
             continue
 
         if user_input.lower() == 'exit':
