@@ -277,7 +277,7 @@ class ResponseGenerator:
             f"Собеседник сказал: «{user_text}»\n"
             f"Это — внутренняя мысль агента (не использовать в ответе):\n"
             f"{thought}\n\n"
-            "Ответ собеседнику (только речь, 1–3 предложения):"
+            "Сформулируй ответ собеседнику."
         )
 
         messages = [
@@ -342,7 +342,7 @@ class Agent:
         self.memory = PersistentMemory("memory.json")
         self.meta = MetaReflection()
         self.thought_gen = ThoughtGenerator()
-        self.response_gen = ResponseGenerator(self.thought_gen.tokenizer, self.thought_gen.model)
+        self.response_gen = ResponseGenerator(self.thought_gen)
         self.self_model = SelfModel()
         self.future = FutureExpectationSystem()
         self.last_thought: Optional[str] = None
