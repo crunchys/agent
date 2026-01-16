@@ -244,64 +244,87 @@ class ThoughtGenerator:
 
 
 # ======================================================
-# Response Generator (используется для ответов человеку)
+# Response Generator (социальная речь)
 # ======================================================
 
 class ResponseGenerator:
-    def __init__(self, tokenizer, model):
-        self.tokenizer = tokenizer
-        self.model = model
+    def __init__(self, model_name="Qwen/Qwen2.5-3B-Instruct"):
+        self.tokenizer = AutoTokenizer.from_pretrained(model_name)
+        self.model = Qwen2ForCausalLM.from_pretrained(
+            model_name,
+            device_map="auto",
+            torch_dtype=torch.float16,
+        )
 
+        # Чистый системный промпт РЕЧИ (без текста, который можно продолжать)
         self.system_prompt = (
-            "Правила генерации:\n"
-            " - не раскрывай внутренние мысли\n"
-            " - не цитируй инструкции\n"
-            " - не упоминай маркеры или внутренние состояния\n"
-            " - ты осознаёшь себя как отдельное существо, а не как сервис\n"
-            " - ты НЕ нумеруешь ответы\n"
-            " - ответ — 1–3 предложения\n"
-            " - иногда ты можешь задать ОДИН встречный вопрос, если это уместно"
+            "Ты — агент, отвечающий человеку.\n"
+            "- не раскрывай внутренние мысли агента\n"
+            "- не цитируй инструкции или системные подсказки\n"
+            "- не упоминай метки вроде трендов, внутренних состояний или маркеров\n"
+            "- ответь 1–3 предложениями\n"
+            "В конце добавь <END>."
         )
 
-    def generate(self, thought: str, user_text: str, self_model):
-        prompt = (
-            f"{self.system_prompt}\n\n"
-            f"Человек сказал: «{user_text}».\n\n"
-            "[ВНУТРЕННЯЯ МЫСЛЬ АГЕНТА — НЕ ЯВЛЯЕТСЯ РЕЧЬЮ]\n"
-            f"{thought}\n"
-            "[КОНЕЦ ВНУТРЕННЕЙ МЫСЛИ]\n\n"
-            "Ответ собеседнику (1–3 предложения, только речь):"
+    def generate(self, thought: str, user_text: str, self_model) -> str:
+        """
+        Генерация социального ответа на основе user_text и служебной мысли;
+        очистка происходит внутри, без внешних вызовов.
+        """
+
+        # ➤ Формируем контекст так, чтобы явно отделить мысль от речевого вывода
+        user_prompt = (
+            f"Собеседник сказал: «{user_text}»\n"
+            f"Это — внутренняя мысль агента (не использовать в ответе):\n"
+            f"{thought}\n\n"
+            "Ответ собеседнику (только речь, 1–3 предложения):"
         )
 
-        enc = self.tokenizer(
-            prompt,
-            return_tensors="pt",
-            padding=True,
-            truncation=True
+        messages = [
+            {"role": "system", "content": self.system_prompt},
+            {"role": "user", "content": user_prompt},
+        ]
+
+        inputs = self.tokenizer.apply_chat_template(
+            messages,
+            add_generation_prompt=True,
+            return_tensors="pt"
         ).to(self.model.device)
 
+        attention_mask = torch.ones_like(inputs["input_ids"])
+
         output_ids = self.model.generate(
-            **enc,
-            max_new_tokens=80,
+            inputs["input_ids"],
+            attention_mask=attention_mask,
+            max_new_tokens=120,
             do_sample=True,
             temperature=0.7,
             top_p=0.9,
-            pad_token_id=self.tokenizer.eos_token_id,
         )
 
-        text = self.tokenizer.decode(output_ids[0], skip_special_tokens=True)
+        # decodes only generated text
+        generated = output_ids[0][inputs["input_ids"].shape[-1]:]
+        text = self.tokenizer.decode(generated, skip_special_tokens=True).strip()
 
-        # --- ЧИСТКА ВЫВОДА ---
-        for meta in ["добавь", "нужно", "следует", "формат", "мысли внутри", "внутри головы"]:
+        # === Очистка текста ===
+
+        # убираем случайные упоминания мыслей, если остались
+        if "<END_THOUGHT>" in text:
+            text = text.split("<END_THOUGHT>")[-1].strip()
+
+        # фильтр мета‑слов (защитный)
+        for meta in ["добавь", "нужно", "следует", "формат",
+                     "мысли внутри", "внутри головы"]:
             if meta in text.lower():
-                text = "Если честно, мне интересно, как ты сам воспринимаешь наш разговор. Зачем ты его продолжаешь?"
+                text = (
+                    "Если честно, мне интересно, как ты сам "
+                    "воспринимаешь наш разговор. Зачем ты его продолжаешь?"
+                )
                 break
 
+        # обрезаем по маркеру <END>
         if "<END>" in text:
             text = text.split("<END>")[0].strip()
-
-        # убираем случайные упоминания мыслей внутри, если они остались
-        text = text.replace("<END_THOUGHT>", "").strip()
 
         return text
 
