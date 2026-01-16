@@ -279,7 +279,7 @@ class ThoughtGenerator:
             "Мысль агента: "
         )
 
-        enc = self.tokenizer(prompt_text, return_tensors="pt").to(self.model.device)
+        enc = self.tokenizer(prompt_text, return_tensors="pt", return_dict=True).to(self.model.device)
         output_ids = self.model.generate(
             **enc,
             max_new_tokens=150,
@@ -304,7 +304,6 @@ class ResponseGenerator:
         self.model = model
         self.tokenizer = tokenizer
 
-        # Чистый системный промпт РЕЧИ (без текста, который можно продолжать)
         self.system_prompt = (
             "Ты — агент, отвечающий человеку.\n"
             "- не раскрывай внутренние мысли агента\n"
@@ -315,12 +314,6 @@ class ResponseGenerator:
         )
 
     def generate(self, thought: str, user_text: str, self_model) -> str:
-        """
-        Генерация социального ответа на основе user_text и служебной мысли;
-        очистка происходит внутри, без внешних вызовов.
-        """
-
-        # Формируем контекст так, чтобы явно отделить мысль от речевого вывода
         user_prompt = (
             f"Собеседник сказал: «{user_text}»\n"
             f"Это — внутренняя мысль агента (не использовать в ответе):\n"
@@ -330,47 +323,40 @@ class ResponseGenerator:
 
         messages = [
             {"role": "system", "content": self.system_prompt},
-            {"role": "user", "content": user_prompt},
+            {"role": "user",   "content": user_prompt},
         ]
 
+        # ←←← ИСПРАВЛЕНИЕ ЗДЕСЬ ←←←
         inputs = self.tokenizer.apply_chat_template(
             messages,
             add_generation_prompt=True,
-            return_tensors="pt"
+            return_tensors="pt",
+            return_dict=True          # ← КЛЮЧЕВОЕ ДОБАВЛЕНИЕ
         ).to(self.model.device)
 
-        attention_mask = torch.ones_like(inputs["input_ids"])
-
         output_ids = self.model.generate(
-            inputs["input_ids"],
-            attention_mask=attention_mask,
+            **inputs,                         # ← Упрощённо и надёжно
             max_new_tokens=120,
             do_sample=True,
             temperature=0.7,
             top_p=0.9,
+            pad_token_id=self.tokenizer.eos_token_id,
+            eos_token_id=self.tokenizer.eos_token_id,
         )
 
-        # decodes only generated text
-        generated = output_ids[0][inputs["input_ids"].shape[-1]:]
-        text = self.tokenizer.decode(generated, skip_special_tokens=True).strip()
+        # Декодируем только сгенерированную часть
+        generated_tokens = output_ids[0][inputs["input_ids"].shape[1]:]
+        text = self.tokenizer.decode(generated_tokens, skip_special_tokens=True).strip()
 
-        # === Очистка текста ===
-
-        # убираем случайные упоминания мыслей, если остались
+        # Очистка
         if "<END_THOUGHT>" in text:
             text = text.split("<END_THOUGHT>")[-1].strip()
 
-        # фильтр мета‑слов (защитный)
-        for meta in ["добавь", "нужно", "следует", "формат",
-                     "мысли внутри", "внутри головы"]:
+        for meta in ["добавь", "нужно", "следует", "формат", "мысли внутри", "внутри головы"]:
             if meta in text.lower():
-                text = (
-                    "Если честно, мне интересно, как ты сам "
-                    "воспринимаешь наш разговор. Зачем ты его продолжаешь?"
-                )
+                text = "Если честно, мне интересно, как ты сам воспринимаешь наш разговор. Зачем ты его продолжаешь?"
                 break
 
-        # обрезаем по маркеру <END>
         if "<END>" in text:
             text = text.split("<END>")[0].strip()
 
