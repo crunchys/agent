@@ -279,7 +279,7 @@ class ThoughtGenerator:
             "Мысль агента: "
         )
 
-        enc = self.tokenizer(prompt_text, return_tensors="pt", return_dict=True).to(self.model.device)
+        enc = self.tokenizer(prompt_text, return_tensors="pt").to(self.model.device)
         output_ids = self.model.generate(
             **enc,
             max_new_tokens=150,
