@@ -5,8 +5,63 @@ from typing import Optional, List, Dict
 import random
 from collections import Counter
 import torch
-from transformers import AutoTokenizer, Qwen2ForCausalLM
+from transformers import AutoTokenizer, AutoModelForCausalLM
 from agent_memory import PersistentMemory  # твой модуль с памятью
+import warnings
+
+# Отключаем предупреждения
+warnings.filterwarnings("ignore", category=FutureWarning)
+warnings.filterwarnings("ignore", category=UserWarning)
+
+# Глобальные переменные для модели (загружаем один раз)
+_MODEL = None
+_TOKENIZER = None
+
+def load_model_and_tokenizer(model_name="Qwen/Qwen2.5-3B-Instruct", hf_token=None):
+    global _MODEL, _TOKENIZER
+    
+    if _MODEL is not None and _TOKENIZER is not None:
+        print("Модель уже загружена, используем существующую")
+        return _MODEL, _TOKENIZER
+
+    print(f"🔄 Загрузка модели: {model_name}")
+    
+    try:
+        # Для CPU используем float16, чтобы сэкономить память (float32 требует ~12GB RAM для 3B модели)
+        dtype = torch.bfloat16 if torch.cuda.is_available() else torch.float16  # На CPU float16 работает, но медленно
+        device = "cuda" if torch.cuda.is_available() else "cpu"
+
+        print(f"   • Устройство: {device}")
+        print(f"   • Тип данных: {dtype}")
+        print("   • Совет: Если у тебя GPU, убедись, что torch установлен с CUDA. На CPU модель может требовать 6–8GB RAM в float16.")
+
+        _TOKENIZER = AutoTokenizer.from_pretrained(
+            model_name,
+            token=hf_token,
+            trust_remote_code=True,
+            padding_side="left"
+        )
+
+        _MODEL = AutoModelForCausalLM.from_pretrained(
+            model_name,
+            token=hf_token,
+            torch_dtype=dtype,
+            device_map="auto",
+            trust_remote_code=True,
+            low_cpu_mem_usage=True,
+        )
+
+        _MODEL.eval()
+        print("✓ Модель успешно загружена\n")
+
+    except Exception as e:
+        print("\n!!! Ошибка при загрузке модели !!!")
+        print(e)
+        if "out of memory" in str(e).lower():
+            print("Вероятная причина: Недостаточно памяти. Попробуй dtype=torch.float16 или квантизацию (если на GPU).")
+        raise
+
+    return _MODEL, _TOKENIZER
 
 
 # ======================================================
@@ -167,12 +222,9 @@ class FutureExpectationSystem:
 # ======================================================
 
 class ThoughtGenerator:
-    def __init__(self, model_name="Qwen/Qwen2.5-3B-Instruct", device="cuda", hf_token=None):
-        print(f"🔄 Загружаю LLM: {model_name}")
-        self.tokenizer = AutoTokenizer.from_pretrained(model_name, token=hf_token)
-        self.model = Qwen2ForCausalLM.from_pretrained(
-            model_name, token=hf_token, device_map="auto", torch_dtype=torch.float16
-        )
+    def __init__(self, model, tokenizer):
+        self.model = model
+        self.tokenizer = tokenizer
         self.system_prompt = (
             "Ты — внутренняя мысль агента, возникающая сама по себе.\n"
             "Генерируй мысли только на русском языке.\n"
@@ -248,13 +300,9 @@ class ThoughtGenerator:
 # ======================================================
 
 class ResponseGenerator:
-    def __init__(self, model_name="Qwen/Qwen2.5-3B-Instruct"):
-        self.tokenizer = AutoTokenizer.from_pretrained(model_name)
-        self.model = Qwen2ForCausalLM.from_pretrained(
-            model_name,
-            device_map="auto",
-            torch_dtype=torch.float16,
-        )
+    def __init__(self, model, tokenizer):
+        self.model = model
+        self.tokenizer = tokenizer
 
         # Чистый системный промпт РЕЧИ (без текста, который можно продолжать)
         self.system_prompt = (
@@ -272,12 +320,12 @@ class ResponseGenerator:
         очистка происходит внутри, без внешних вызовов.
         """
 
-        # ➤ Формируем контекст так, чтобы явно отделить мысль от речевого вывода
+        # Формируем контекст так, чтобы явно отделить мысль от речевого вывода
         user_prompt = (
             f"Собеседник сказал: «{user_text}»\n"
             f"Это — внутренняя мысль агента (не использовать в ответе):\n"
             f"{thought}\n\n"
-            "Сформулируй ответ собеседнику."
+            "Ответ собеседнику (только речь, 1–3 предложения):"
         )
 
         messages = [
@@ -334,52 +382,21 @@ class ResponseGenerator:
 # ======================================================
 
 class Agent:
-    def __init__(self):
+    def __init__(self, hf_token=None):
+        # Загружаем модель один раз здесь
+        model, tokenizer = load_model_and_tokenizer(hf_token=hf_token)
+        
         self.state = MentalState.initial()
         self.emotion = EmotionSystem()
         self.attention = AttentionSystem()
         self.prediction = PredictionErrorSystem()
         self.memory = PersistentMemory("memory.json")
         self.meta = MetaReflection()
-        self.thought_gen = ThoughtGenerator()
-        self.response_gen = ResponseGenerator()
+        self.thought_gen = ThoughtGenerator(model, tokenizer)
+        self.response_gen = ResponseGenerator(model, tokenizer)
         self.self_model = SelfModel()
         self.future = FutureExpectationSystem()
         self.last_thought: Optional[str] = None
-
-    def generate_initiative(self) -> Dict[str, float | str]:
-        """
-        Создаёт осознанную инициативу агента, основанную
-        на текущем состоянии, памяти и любопытстве.
-        """
-
-        # 1. Получаем контекст: последние события
-        last_events = self.memory.recent(5)
-        last_focuses = [e["focus"] for e in last_events if e.get("focus")]
-
-        # 2. Определяем тему инициативы
-        if not last_focuses:
-            topic = "о своём происхождении"
-        else:
-            # если есть фокус, возможно анализировать его
-            # или перейти к следующей теме
-            topic = random.choice(last_focuses)
-
-        # 3. Формулируем текст инициативы
-        # Можно усложнить с помощью LLM позже
-        initiative_text = (
-            f"Агент интересуется: хочу подумать подробнее {topic}, "
-            "чтобы лучше понять свой прошлый опыт и его значение."
-        )
-
-        # 4. Сальенс и валентность делают инициирование заметным
-        return {
-            "type": "initiative",
-            "content": initiative_text,
-            "salience": 0.8 + random.uniform(0.0, 0.1),
-            "intensity": 0.4 + random.uniform(0.0, 0.2),
-            "valence": random.uniform(-0.1, 0.1),
-        }
 
     def step(self, stimuli: List[Dict]):
         prediction_errors = []
@@ -389,101 +406,97 @@ class Agent:
             pe = self.prediction.compute(s)
             s["prediction_error"] = pe
             prediction_errors.append(pe)
-            s["salience"] += pe * 0.5
-            s["intensity"] += pe * 0.3
-            self.state = self.emotion.apply_stimulus(self.state, s)
-            self.future.update(s['content'], s['valence'], s['intensity'])
-            curiosity += self.future.curiosity(s['content'])
+            s["curiosity"] = self.future.curiosity(s["content"])
+            curiosity += s["curiosity"]
 
-        curiosity /= len(stimuli) if stimuli else 1
-        self.state.arousal = min(1.0, self.state.arousal + curiosity*0.2)
+        avg_prediction_error = sum(prediction_errors) / len(prediction_errors) if prediction_errors else 0.0
+        avg_curiosity = curiosity / len(stimuli) if stimuli else 0.0
+
+        for s in stimuli:
+            self.emotion.apply_stimulus(self.state, s)
 
         self.state.focus = self.attention.select_focus(stimuli)
-        self.state = self.emotion.decay(self.state)
-        self.state.timestamp = time()
 
-        self.memory.store({
+        last_events = self.memory.recent(5)
+
+        thought = self.thought_gen.generate_thought(
+            self.state.focus,
+            self.state.arousal,
+            self.state.valence,
+            avg_prediction_error,
+            last_events,
+            self.self_model,
+            avg_curiosity,
+        )
+
+        event = {
             "type": "experience",
-            "time": round(self.state.timestamp, 2),
+            "time": round(time(), 2),
             "focus": self.state.focus,
             "arousal": round(self.state.arousal, 3),
             "valence": round(self.state.valence, 3),
-            "prediction_error": prediction_errors[0] if prediction_errors else 0.0,
-        })
+            "prediction_error": round(avg_prediction_error, 3),
+            "curiosity": round(avg_curiosity, 3),
+            "thought": thought,
+        }
+
+        self.memory.store(event)
+
+        meta_ref = self.meta.reflect(self.memory)
+        if meta_ref:
+            self.memory.store(meta_ref)
 
         self.self_model.reflect(self.state, self.memory)
-        last_five = self.memory.recent(5)
-        trend_valence = "нейтральный"
-        if len(last_five) >= 2:
-            delta = last_five[-1]["valence"] - last_five[0]["valence"]
-            trend_valence = "повышающийся" if delta > 0 else "падающий" if delta < 0 else "стабильный"
 
-        contrast_signal = None
-        if self.last_thought and len(last_five) >= 2:
-            valence_shift = last_five[-1]["valence"] - last_five[-2]["valence"]
-            if abs(valence_shift) > 0.2:
-                contrast_signal = {
-                    "previous_thought": self.last_thought,
-                    "valence_shift": round(valence_shift, 2),
-                }
-
-        thought = self.thought_gen.generate_thought(
-            self.state.focus, self.state.arousal, self.state.valence,
-            prediction_errors[0] if prediction_errors else 0.0,
-            last_five, self.self_model, curiosity,
-            contrast_signal
-        )
-
-        print("\n💭 Мысль агента:", thought)
-
-        # Ответ собеседнику
         for s in stimuli:
-            if s.get("type") == "interaction":
-                reply = self.response_gen.generate(thought, s["content"], self.self_model)
-                print("🗣 Ответ агента:", reply)
+            self.future.update(s["content"], self.state.valence, self.state.arousal)
 
-        print(f"  [Тренд валентности последних 5 событий: {trend_valence}]\n")
+        self.emotion.decay(self.state)
+        self.state.timestamp = time()
+
         self.last_thought = thought
+        return thought
+
+    def respond(self, user_text: str) -> str:
+        if self.last_thought is None:
+            self.step([])  # Генерация начальной мысли, если нужно
+
+        response = self.response_gen.generate(self.last_thought, user_text, self.self_model)
+        return response
 
 
 # ======================================================
-# Simulation
+# Main Loop (пример использования)
 # ======================================================
 
-def run_interactive_simulation(timeout: int = 60):
-    agent = Agent()
+if __name__ == "__main__":
+    agent = Agent()  # Здесь модель загрузится один раз
 
-    print("\n💬 Пиши сообщение или жди — агент продолжает размышлять (ввод не обязателен).")
-    print("   Чтобы завершить, напиши 'exit' или 'quit'.\n")
+    print("Агент готов. Введите сообщение (или 'exit' для выхода).")
 
     while True:
         try:
-            user_input = inputimeout(prompt="Ты: ", timeout=timeout).strip()
+            user_input = inputimeout(prompt="Вы: ", timeout=60)
         except TimeoutOccurred:
-            user_input = ""
+            print("Таймаут. Генерирую спонтанную мысль...")
+            thought = agent.step([])  # Стимули без ввода
+            print(f"Мысль агента: {thought}")
+            continue
 
-        # проверка на выход
-        if user_input.lower() in {"exit", "quit"}:
-            print("Завершение симуляции.")
+        if user_input.lower() == 'exit':
             break
 
-        stimuli = []
-
-        if user_input:
-            # если пользователь ввёл текст
-            stimuli.append({
-                "type": "interaction",
+        stimuli = [
+            {
                 "content": user_input,
-                "salience": 0.9,
-                "intensity": 0.4,
-                "valence": 0.0,
-            })
-        else:
-            # если таймаут — агент проявляет инициативу
-            stimuli.append(agent.generate_initiative())
+                "intensity": random.uniform(0.1, 0.5),
+                "valence": random.uniform(-0.2, 0.2),
+                "salience": random.uniform(0.3, 0.8),
+            }
+        ]
 
-        agent.step(stimuli)
+        thought = agent.step(stimuli)
+        print(f"Мысль агента: {thought}")
 
-
-if __name__ == "__main__":
-    run_interactive_simulation()
+        response = agent.respond(user_input)
+        print(f"Агент: {response}")
