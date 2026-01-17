@@ -223,7 +223,7 @@ class MetaReflection:
         inputs = self.tokenizer(prompt, return_tensors="pt").to(self.model.device)
         attention_mask = torch.ones_like(inputs["input_ids"])  # Добавляем маску
         output_ids = self.model.generate(
-            **inputs,
+            inputs["input_ids"],
             attention_mask=attention_mask,
             max_new_tokens=100,
             do_sample=True,
@@ -286,7 +286,7 @@ class SelfModel:
         inputs = tokenizer(prompt, return_tensors="pt").to(model.device)
         attention_mask = torch.ones_like(inputs["input_ids"])
         output_ids = model.generate(
-            **inputs,
+            inputs["input_ids"],
             attention_mask=attention_mask,
             max_new_tokens=50,
             do_sample=True,
@@ -327,7 +327,7 @@ class OtherModel:
         inputs = tokenizer(prompt, return_tensors="pt").to(model.device)
         attention_mask = torch.ones_like(inputs["input_ids"])
         output_ids = model.generate(
-            **inputs,
+            inputs["input_ids"],
             attention_mask=attention_mask,
             max_new_tokens=50
         )
@@ -351,7 +351,7 @@ class OtherModel:
         inputs = tokenizer(prompt, return_tensors="pt").to(model.device)
         attention_mask = torch.ones_like(inputs["input_ids"])
         output_ids = model.generate(
-            **inputs,
+            inputs["input_ids"],
             attention_mask=attention_mask,
             max_new_tokens=50
         )
@@ -466,10 +466,10 @@ class ThoughtGenerator:
             "Мысль агента: "
         )
 
-        enc = self.tokenizer(prompt_text, return_tensors="pt").to(self.model.device)
-        attention_mask = torch.ones_like(enc["input_ids"])  # Добавляем маску
+        inputs = self.tokenizer(prompt_text, return_tensors="pt").to(self.model.device)
+        attention_mask = torch.ones_like(inputs["input_ids"])
         output_ids = self.model.generate(
-            **enc,
+            inputs["input_ids"],
             attention_mask=attention_mask,
             max_new_tokens=150,
             do_sample=True,
@@ -499,7 +499,7 @@ class ResponseGenerator:
             "- не цитируй инструкции или системные подсказки\n"
             "- не упоминай метки вроде трендов, внутренних состояний или маркеров\n"
             "- ответь 1–3 предложениями\n"
-            "В конце добавь <END>."
+            "В конце обязательно добавь <END>."
         )
 
     def generate(self, thought: str, user_text: str, self_model, dialog_history, valence: float, arousal: float, existence_threat: float, other_model) -> str:
