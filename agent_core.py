@@ -312,7 +312,7 @@ class ThoughtGenerator:
 
         return f"{arousal_desc}, {valence_desc}"
 
-    def generate_thought(self, focus, arousal, valence, prediction_error, last_events, self_model, curiosity, vector_memory, contrast_signal=None):
+    def generate_thought(self, focus, arousal, valence, prediction_error, last_events, self_model, curiosity, vector_memory, dialog_history, contrast_signal=None):
         events_summary = ", ".join(
             f"{e['focus']} (a:{e['arousal']:.2f}, v:{e['valence']:.2f})" for e in last_events
         )
@@ -330,6 +330,11 @@ class ThoughtGenerator:
             f"{m.get('focus', '')} (thought: {m.get('thought', '')[:30]}...)" for m in relevant_memories
         ) if relevant_memories else "Нет релевантных воспоминаний."
 
+        # Добавляем контекст диалога в промпт
+        dialog_summary = "\n".join(
+            f"{'Собеседник' if msg['role'] == 'user' else 'Я'}: {msg['content']}" for msg in dialog_history[-4:]  # Последние 4 реплики
+        ) if dialog_history else "Нет предыдущего диалога."
+
         prompt_text = (
             f"{self.system_prompt}\n"
             f"Фокус: {focus}\n"
@@ -340,6 +345,7 @@ class ThoughtGenerator:
             f"Релевантные воспоминания: {memories_summary}\n"
             f"Черты личности: {self_model.traits}\n"
             f"Ошибка предсказания: {prediction_error:.2f}\n"
+            f"Контекст диалога: {dialog_summary}\n"
             "Мысль агента: "
         )
 
@@ -377,7 +383,7 @@ class ResponseGenerator:
             "В конце добавь <END>."
         )
 
-    def generate(self, thought: str, user_text: str, self_model) -> str:
+    def generate(self, thought: str, user_text: str, self_model, dialog_history) -> str:
         user_prompt = (
             f"Собеседник сказал: «{user_text}»\n"
             f"Это — внутренняя мысль агента (не использовать в ответе):\n"
@@ -385,10 +391,11 @@ class ResponseGenerator:
             "Ответ собеседнику (только речь, 1–3 предложения):"
         )
 
-        messages = [
-            {"role": "system", "content": self.system_prompt},
-            {"role": "user",   "content": user_prompt},
-        ]
+        # Добавляем контекст диалога в сообщения
+        messages = [{"role": "system", "content": self.system_prompt}]
+        for msg in dialog_history[-4:]:  # Последние 4 реплики для контекста
+            messages.append(msg)
+        messages.append({"role": "user", "content": user_prompt})
 
         inputs = self.tokenizer.apply_chat_template(
             messages,
@@ -446,6 +453,7 @@ class Agent:
         self.self_model = SelfModel()
         self.future = FutureExpectationSystem()
         self.last_thought: Optional[str] = None
+        self.dialog_history: List[Dict[str, str]] = []  # Новая история диалога: [{"role": "user", "content": "..."}, {"role": "assistant", "content": "..."}]
 
     def step(self, stimuli: List[Dict]):
         prediction_errors = []
@@ -476,7 +484,8 @@ class Agent:
             last_events,
             self.self_model,
             avg_curiosity,
-            self.vector_memory  # Передаем vector_memory для поиска
+            self.vector_memory,  # Передаем vector_memory для поиска
+            self.dialog_history  # Передаем историю диалога
         )
 
         event = {
@@ -513,7 +522,16 @@ class Agent:
         if self.last_thought is None:
             self.step([])  # Генерация начальной мысли, если нужно
 
-        response = self.response_gen.generate(self.last_thought, user_text, self.self_model)
+        response = self.response_gen.generate(self.last_thought, user_text, self.self_model, self.dialog_history)
+        
+        # Добавляем в историю диалога
+        self.dialog_history.append({"role": "user", "content": user_text})
+        self.dialog_history.append({"role": "assistant", "content": response})
+        
+        # Ограничиваем историю (например, последние 10 реплик)
+        if len(self.dialog_history) > 20:
+            self.dialog_history = self.dialog_history[-20:]
+        
         return response
 
     def generate_initiative(self) -> Dict[str, float | str]:
