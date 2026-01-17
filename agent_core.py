@@ -3,8 +3,9 @@ from systems import EmotionSystem, PredictionErrorSystem, AttentionSystem, Futur
 from memory_classes import VectorMemory, EpisodicMemory, MetaReflection
 from model_classes import SelfModel, OtherModel
 from generators import ThoughtGenerator, ResponseGenerator
-from agent_memory import PersistentMemory  # Твой модуль
+from agent_memory import PersistentMemory
 from utils import load_model_and_tokenizer
+from planning import Planner, Goal
 from inputimeout import inputimeout, TimeoutOccurred
 from typing import List, Dict, Optional
 import random
@@ -28,6 +29,7 @@ class Agent:
         self.self_model = SelfModel()
         self.other_model = OtherModel()  # Новая модель других (пользователя)
         self.future = FutureExpectationSystem()
+        self.planner = Planner(model=model, tokenizer=tokenizer, self_model=self.self_model)
         self.last_thought: Optional[str] = None
         self.dialog_history: List[Dict[str, str]] = []  # История диалога
         self.last_self_evaluation: str = ""  # Последняя самооценка
@@ -49,6 +51,26 @@ class Agent:
 
         # Сохраняем текущее любопытство для использования в ответе
         self.current_curiosity = avg_curiosity
+
+        # Планирование
+        if random.random() < 0.4 or not self.planner.goals:  # Чаще проверяем цели
+            new_goal = self.planner.form_goal(self.state, avg_curiosity, self.state.existence_threat)
+            if new_goal:
+                self.planner.decompose_goal(new_goal)
+                self.planner.goals.append(new_goal)
+                print(f"[ПЛАНИРОВАНИЕ] Новая цель: {new_goal.description}")
+
+        # Обновляем прогресс по активным целям
+        if stimuli:
+            is_success = self.state.valence > 0
+            for goal in self.planner.goals[:]:
+                if goal.status == "active":
+                    self.planner.update_progress(goal, is_success)
+                    if goal.status != "active":
+                        print(f"[ПЛАНИРОВАНИЕ] Цель '{goal.description}' {goal.status}")
+
+        # Очищаем завершённые/проваленные цели (оставляем 5 последних)
+        self.planner.goals = [g for g in self.planner.goals if g.status == "active"][-5:]
 
         for s in stimuli:
             self.emotion.apply_stimulus(self.state, s)
@@ -113,11 +135,12 @@ class Agent:
         # Обновляем модель других
         self.other_model.update_traits(user_text, self.response_gen.model, self.response_gen.tokenizer)
         predicted_user_behavior = self.other_model.predict_behavior(self.dialog_history, self.response_gen.model, self.response_gen.tokenizer)
+        current_action = self.planner.get_current_action()
 
         response = self.response_gen.generate(
             self.last_thought, user_text, self.self_model, self.dialog_history,
             self.state.valence, self.state.arousal, self.state.existence_threat,
-            self.other_model, self.current_curiosity  # Передаём любопытство
+            self.other_model, self.current_curiosity, current_action or "" # Добавляем действие
         )
         
         # Добавляем в историю диалога
@@ -134,7 +157,7 @@ class Agent:
         # Метапознание
         action_desc = f"Ответил на '{user_text[:20]}...' с текстом '{response[:20]}...'."
         self.last_self_evaluation = self.self_model.evaluate_action(action_desc, self.state.valence, self.response_gen.model, self.response_gen.tokenizer)
-        
+
         return response
 
     def generate_initiative(self) -> Dict[str, float | str]:
@@ -155,7 +178,8 @@ class Agent:
 
         thought = self.step(stimuli)
 
-        initiative_response = self.respond("Что ты думаешь дальше?")
+        current_action = self.planner.get_current_action()
+        initiative_response = self.respond("Что ты думаешь дальше?", current_action=current_action)
 
         return {
             "thought": thought,
