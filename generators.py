@@ -76,9 +76,11 @@ class ThoughtGenerator:
         )
 
         inputs = self.tokenizer(prompt_text, return_tensors="pt").to(self.model.device)
-        attention_mask = torch.ones_like(inputs["input_ids"])
+        input_ids = inputs["input_ids"]
+        attention_mask = torch.ones_like(input_ids)
+
         output_ids = self.model.generate(
-            inputs["input_ids"],
+            input_ids,
             attention_mask=attention_mask,
             max_new_tokens=150,
             do_sample=True,
@@ -91,6 +93,7 @@ class ThoughtGenerator:
         if "<END_THOUGHT>" in text:
             text = text.split("<END_THOUGHT>")[0].strip()
         return text + " <END_THOUGHT>"
+
 
 class ResponseGenerator:
     def __init__(self, model, tokenizer):
@@ -137,10 +140,12 @@ class ResponseGenerator:
             return_tensors="pt"
         ).to(self.model.device)
 
-        attention_mask = inputs["attention_mask"]
+        # inputs — это tensor input_ids (для Qwen)
+        input_ids = inputs
+        attention_mask = torch.ones_like(input_ids)
 
         output_ids = self.model.generate(
-            inputs,
+            input_ids,
             attention_mask=attention_mask,
             max_new_tokens=120,
             do_sample=True,
@@ -150,7 +155,7 @@ class ResponseGenerator:
             eos_token_id=self.tokenizer.eos_token_id,
         )
 
-        generated_tokens = output_ids[0][inputs.shape[1]:]
+        generated_tokens = output_ids[0][input_ids.shape[1]:]
         text = self.tokenizer.decode(generated_tokens, skip_special_tokens=True).strip()
 
         if "<END_THOUGHT>" in text:
