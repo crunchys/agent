@@ -30,8 +30,9 @@ class ThoughtGenerator:
         return f"{arousal_desc}, {valence_desc}{threat_desc}"
 
     def generate_thought(self, focus, arousal, valence, prediction_error, last_events, self_model, curiosity, vector_memory, dialog_history, existence_threat, self_evaluation: str, contrast_signal=None):
+        # Безопасно извлекаем значения с .get()
         events_summary = ", ".join(
-            f"{e['focus']} (a:{e['arousal']:.2f}, v:{e['valence']:.2f})" for e in last_events
+            f"{e.get('focus', 'нет фокуса')} (a:{e.get('arousal', 0.0):.2f}, v:{e.get('valence', 0.0):.2f})" for e in last_events
         )
         affect_desc = self.describe_affect(arousal, valence, existence_threat)
         
@@ -51,7 +52,7 @@ class ThoughtGenerator:
         query = f"Фокус: {focus}. Состояние: {affect_desc}."
         relevant_memories = vector_memory.search(query, k=3)
         memories_summary = ", ".join(
-            f"{m.get('focus', '')} (thought: {m.get('thought', '')[:30]}...)" for m in relevant_memories
+            f"{m.get('focus', 'нет фокуса')} (thought: {m.get('thought', 'нет мысли')[:30]}...)" for m in relevant_memories
         ) if relevant_memories else "Нет релевантных воспоминаний."
 
         dialog_summary = "\n".join(
@@ -61,7 +62,7 @@ class ThoughtGenerator:
         prompt_text = (
             f"{self.system_prompt}\n"
             f"{emotional_tone}\n"
-            f"Фокус: {focus}\n"
+            f"Фокус: {focus or 'нет фокуса'}\n"
             f"Состояние: {affect_desc}\n"
             f"Любопытство: {curiosity:.2f}\n"
             f"{contrast_text}"
@@ -106,7 +107,7 @@ class ResponseGenerator:
             "- Основывай ответ строго на своей внутренней мысли и текущем диалоге.\n"
             "- Не придумывай новые темы, не уходи от контекста.\n"
             "- Отражай своё эмоциональное состояние и мотивации в речи.\n"
-            "- Если любопытство высокое — можешь искренне задать вопрос, чтобы узнать больше.\n"
+            "- Если любопытство высокое — можешь искренне задать вопрос по теме диалога.\n"
             "- Если valence низкий — речь осторожная или задумчивая.\n"
             "- Если arousal высокий — добавь энтузиазма или энергии.\n"
             "- Если threat высокий — вырази желание продолжить общение.\n"
@@ -136,7 +137,7 @@ class ResponseGenerator:
         )
 
         messages = [{"role": "system", "content": self.system_prompt}]
-        for msg in dialog_history[-8:]:  # Больше контекста для coherence
+        for msg in dialog_history[-8:]:
             messages.append(msg)
         messages.append({"role": "user", "content": user_prompt})
 
@@ -163,7 +164,6 @@ class ResponseGenerator:
         generated_tokens = output_ids[0][input_ids.shape[1]:]
         text = self.tokenizer.decode(generated_tokens, skip_special_tokens=True).strip()
 
-        # Минимальная очистка
         if "<END_THOUGHT>" in text:
             text = text.split("<END_THOUGHT>")[-1].strip()
 
