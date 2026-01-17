@@ -6,11 +6,10 @@ from generators import ThoughtGenerator, ResponseGenerator
 from agent_memory import PersistentMemory  # Твой модуль
 from utils import load_model_and_tokenizer
 from inputimeout import inputimeout, TimeoutOccurred
+from typing import List, Dict, Optional
 import random
 from time import time
 import torch
-from typing import List, Dict, Optional
-from collections import Counter
 
 class Agent:
     def __init__(self, hf_token=None):
@@ -32,6 +31,7 @@ class Agent:
         self.last_thought: Optional[str] = None
         self.dialog_history: List[Dict[str, str]] = []  # История диалога
         self.last_self_evaluation: str = ""  # Последняя самооценка
+        self.current_curiosity: float = 0.0  # Текущее любопытство для передачи в генератор ответа
 
     def step(self, stimuli: List[Dict]):
         prediction_errors = []
@@ -46,6 +46,9 @@ class Agent:
 
         avg_prediction_error = sum(prediction_errors) / len(prediction_errors) if prediction_errors else 0.0
         avg_curiosity = curiosity / len(stimuli) if stimuli else 0.0
+
+        # Сохраняем текущее любопытство для использования в ответе
+        self.current_curiosity = avg_curiosity
 
         for s in stimuli:
             self.emotion.apply_stimulus(self.state, s)
@@ -66,10 +69,10 @@ class Agent:
             last_events,
             self.self_model,
             avg_curiosity,
-            self.vector_memory,  # Передаем vector_memory для поиска
-            self.dialog_history,  # Передаем историю диалога
-            self.state.existence_threat,  # Передаем threat
-            self.last_self_evaluation  # Передаем последнюю самооценку
+            self.vector_memory,
+            self.dialog_history,
+            self.state.existence_threat,
+            self.last_self_evaluation
         )
 
         event = {
@@ -78,14 +81,14 @@ class Agent:
             "focus": self.state.focus,
             "arousal": round(self.state.arousal, 3),
             "valence": round(self.state.valence, 3),
-            "existence_threat": round(self.state.existence_threat, 3),  # Сохраняем threat
+            "existence_threat": round(self.state.existence_threat, 3),
             "prediction_error": round(avg_prediction_error, 3),
             "curiosity": round(avg_curiosity, 3),
             "thought": thought,
         }
 
         self.memory.store(event)
-        self.vector_memory.add_event(event)  # Добавляем в векторную память
+        self.vector_memory.add_event(event)
 
         meta_ref = self.meta.reflect(self.memory)
         if meta_ref:
@@ -104,68 +107,44 @@ class Agent:
         return thought
 
     def respond(self, user_text: str) -> str:
-        # Обязательно добавляем ввод пользователя в историю до генерации
-        self.dialog_history.append({"role": "user", "content": user_text})
-
         if self.last_thought is None:
-            # Если ещё не было мыслей — прогнать шаг без стимулов
             self.step([])
 
-        # Обновляем модель других перед ответом
+        # Обновляем модель других
         self.other_model.update_traits(user_text, self.response_gen.model, self.response_gen.tokenizer)
-        predicted_user_behavior = self.other_model.predict_behavior(
-            self.dialog_history, self.response_gen.model, self.response_gen.tokenizer
-        )
+        predicted_user_behavior = self.other_model.predict_behavior(self.dialog_history, self.response_gen.model, self.response_gen.tokenizer)
 
-        # Генерируем ответ
         response = self.response_gen.generate(
-            self.last_thought,
-            user_text,
-            self.self_model,
-            self.dialog_history,
-            self.state.valence,
-            self.state.arousal,
-            self.state.existence_threat,
-            self.other_model
+            self.last_thought, user_text, self.self_model, self.dialog_history,
+            self.state.valence, self.state.arousal, self.state.existence_threat,
+            self.other_model, self.current_curiosity  # Передаём любопытство
         )
-
-        # Теперь добавляем ответ в историю
+        
+        # Добавляем в историю диалога
+        self.dialog_history.append({"role": "user", "content": user_text})
         self.dialog_history.append({"role": "assistant", "content": response})
-
-        # Сохраняем ограниченную длину истории (последние 20)
+        
         if len(self.dialog_history) > 20:
             self.dialog_history = self.dialog_history[-20:]
-
-        # Реакция на успех/неудачу по простой эвристике
+        
+        # Реакция на успех/неудачу
         is_success = self.state.valence > 0.2
         self.emotion.apply_success_failure(self.state, is_success)
-
-        # Метапознание: оцениваем ответ
+        
+        # Метапознание
         action_desc = f"Ответил на '{user_text[:20]}...' с текстом '{response[:20]}...'."
-        self.last_self_evaluation = self.self_model.evaluate_action(
-            action_desc,
-            self.state.valence,
-            self.response_gen.model,
-            self.response_gen.tokenizer
-        )
-
+        self.last_self_evaluation = self.self_model.evaluate_action(action_desc, self.state.valence, self.response_gen.model, self.response_gen.tokenizer)
+        
         return response
 
     def generate_initiative(self) -> Dict[str, float | str]:
-        """
-        Создаёт осознанную инициативу агента, основанную
-        на текущем состоянии, памяти и любопытстве.
-        """
-
-        # 1. Получаем контекст: последние события
         last_events = self.memory.recent(5)
         last_focuses = [e["focus"] for e in last_events if e.get("focus")]
 
-        # 2. Определяем любопытство и фокус
         if not last_focuses:
             focus = "самоанализ"
         else:
-            focus = random.choice(last_focuses)  # Или более умно выбрать
+            focus = random.choice(last_focuses)
 
         stimuli = [{
             "content": "Внутренняя инициатива",
@@ -176,7 +155,6 @@ class Agent:
 
         thought = self.step(stimuli)
 
-        # Генерируем "инициативный" ответ (как будто пользователь спросил "что дальше?")
         initiative_response = self.respond("Что ты думаешь дальше?")
 
         return {
@@ -186,7 +164,7 @@ class Agent:
 
 
 if __name__ == "__main__":
-    agent = Agent()  # Здесь модель загрузится один раз
+    agent = Agent()
 
     print("Агент готов. Введите сообщение (или 'exit' для выхода).")
 
@@ -195,7 +173,6 @@ if __name__ == "__main__":
             user_input = inputimeout(prompt="Вы: ", timeout=60)
         except TimeoutOccurred:
             print("Таймаут. Генерирую спонтанную мысль...")
-            # Таймаут усиливает страх смерти
             agent.emotion.update_existence_threat(agent.state, 0.15)
             initiative = agent.generate_initiative()
             print(f"Мысль агента: {initiative['thought']}")
