@@ -24,9 +24,10 @@ class SelfModel:
             self.self_evaluations = []
 
     def reflect(self, state, memory, new_lesson: Optional[str] = None):
-        recent = memory.recent(5)
-        avg_valence = sum(e['valence'] for e in recent)/len(recent) if recent else 0
-        self.traits['любопытство'] = min(1.0, max(0.0, 0.5 + avg_valence*0.5))
+        # Фильтруем только события типа "experience", чтобы избежать KeyError
+        recent_experiences = [e for e in memory.recent(5) if e.get("type") == "experience"]
+        avg_valence = sum(e['valence'] for e in recent_experiences) / len(recent_experiences) if recent_experiences else 0
+        self.traits['любопытство'] = min(1.0, max(0.0, 0.5 + avg_valence * 0.5))
         
         if new_lesson:
             self.lessons.append(new_lesson)
@@ -34,6 +35,7 @@ class SelfModel:
                 self.traits['смелость'] = max(0.0, self.traits['смелость'] - 0.1)
 
     def evaluate_action(self, action_desc: str, outcome_valence: float, model, tokenizer):
+        """Метапознание: Оценка действия"""
         prompt = (
             f"Оцени это действие: {action_desc}. Исход (valence): {outcome_valence:.2f}. "
             "Было ли оно полезным/вредным? Кратко: 1-2 предложения на русском. "
@@ -69,6 +71,7 @@ class OtherModel:
             self.traits = {'любопытство': 0.5, 'агрессивность': 0.0}
 
     def update_traits(self, user_text: str, model, tokenizer):
+        """Обновление черт на основе текста пользователя"""
         prompt = (
             f"Оцени черты пользователя по тексту: '{user_text}'. "
             "Верни: любопытство: [0-1], агрессивность: [0-1]. Кратко."
@@ -90,6 +93,7 @@ class OtherModel:
             pass
 
     def predict_behavior(self, dialog_history: List[Dict], model, tokenizer):
+        """Предсказание поведения пользователя"""
         history_summary = "\n".join(f"{msg['role']}: {msg['content']}" for msg in dialog_history[-3:])
         prompt = (
             f"На основе диалога: {history_summary}. "
