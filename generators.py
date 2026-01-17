@@ -114,7 +114,7 @@ class ResponseGenerator:
             "- Будь краток и естественен, как в живом разговоре."
         )
 
-    def generate(self, thought: str, user_text: str, self_model, dialog_history, valence: float, arousal: float, existence_threat: float, other_model, curiosity: float) -> str:
+    def generate(self, thought: str, user_text: str, self_model, dialog_history, valence: float, arousal: float, existence_threat: float, other_model, curiosity: float, current_action: str = "") -> str:
         affect_desc = ThoughtGenerator.describe_affect(None, arousal, valence, existence_threat)
         
         intent_prompt = (
@@ -135,6 +135,8 @@ class ResponseGenerator:
             f"{other_traits}\n"
             "Мой естественный ответ создателю:"
         )
+        if current_action:
+            user_prompt += f"\nТекущее действие по плану: {current_action}. Используй его как основу для ответа."
 
         messages = [{"role": "system", "content": self.system_prompt}]
         for msg in dialog_history[-8:]:
