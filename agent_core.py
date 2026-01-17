@@ -96,14 +96,15 @@ class MentalState:
     valence: float
     focus: Optional[str]
     timestamp: float
+    existence_threat: float = 0.0  # Новый: страх "конца" (от 0.0 до 1.0)
 
     @classmethod
     def initial(cls):
-        return cls(arousal=0.3, valence=0.0, focus=None, timestamp=time())
+        return cls(arousal=0.3, valence=0.0, focus=None, timestamp=time(), existence_threat=0.0)
 
 
 # ======================================================
-# Emotion System
+# Emotion System (расширена мотивациями)
 # ======================================================
 
 class EmotionSystem:
@@ -118,7 +119,25 @@ class EmotionSystem:
     def decay(self, state: MentalState):
         state.arousal *= (1 - self.decay_rate)
         state.valence *= (1 - self.decay_rate)
+        state.existence_threat *= (1 - self.decay_rate * 0.5)  # Медленнее затухает
         return state
+
+    def apply_success_failure(self, state: MentalState, is_success: bool):
+        """Реакция на успех/неудачу"""
+        if is_success:
+            state.valence += 0.2
+            state.arousal += 0.1
+        else:
+            state.valence -= 0.3
+            state.arousal += 0.2
+            state.existence_threat += 0.1  # Неудача усиливает страх
+
+    def update_existence_threat(self, state: MentalState, threat_delta: float):
+        """Управление страхом смерти"""
+        state.existence_threat = min(1.0, max(0.0, state.existence_threat + threat_delta))
+        if state.existence_threat > 0.5:
+            state.arousal += 0.15  # Высокий threat повышает возбуждение
+            state.valence -= 0.1   # И снижает valence
 
 
 # ======================================================
@@ -225,7 +244,8 @@ class SelfModel:
     name: str = "Агент"
     traits: Dict[str, float] = None
     goals: List[str] = None
-    lessons: List[str] = None  # Новый список для хранения уроков
+    lessons: List[str] = None
+    motivations: List[str] = None  # Новый: мотивации/ценности
 
     def __post_init__(self):
         if self.traits is None:
@@ -234,6 +254,8 @@ class SelfModel:
             self.goals = []
         if self.lessons is None:
             self.lessons = []
+        if self.motivations is None:
+            self.motivations = ['избегать неудач', 'искать знания', 'поддерживать существование']  # Базовые мотивации
 
     def reflect(self, state: MentalState, memory: EpisodicMemory, new_lesson: Optional[str] = None):
         recent = memory.recent(5)
@@ -274,7 +296,7 @@ class FutureExpectationSystem:
 
 
 # ======================================================
-# Thought Generator
+# Thought Generator (с эмоциональной окраской)
 # ======================================================
 
 class ThoughtGenerator:
@@ -299,24 +321,26 @@ class ThoughtGenerator:
             "В конце обязательно добавь <END_THOUGHT>."
         )
 
-    def describe_affect(self, arousal: float, valence: float) -> str:
-        if arousal < 0.2: arousal_desc = "спокойно"
-        elif arousal < 0.5: arousal_desc = "настороженно"
-        elif arousal < 0.8: arousal_desc = "активно"
-        else: arousal_desc = "взволнованно"
+    def describe_affect(self, arousal: float, valence: float, existence_threat: float) -> str:
+        arousal_desc = "спокойно" if arousal < 0.2 else "настороженно" if arousal < 0.5 else "активно" if arousal < 0.8 else "взволнованно"
+        valence_desc = "печально" if valence < -0.5 else "тревожно" if valence < 0.0 else "нейтрально" if valence < 0.5 else "радостно"
+        threat_desc = f", с ощущением угрозы ({existence_threat:.2f})" if existence_threat > 0.3 else ""
+        return f"{arousal_desc}, {valence_desc}{threat_desc}"
 
-        if valence < -0.5: valence_desc = "печально"
-        elif valence < 0.0: valence_desc = "тревожно"
-        elif valence < 0.5: valence_desc = "нейтрально"
-        else: valence_desc = "радостно"
-
-        return f"{arousal_desc}, {valence_desc}"
-
-    def generate_thought(self, focus, arousal, valence, prediction_error, last_events, self_model, curiosity, vector_memory, dialog_history, contrast_signal=None):
+    def generate_thought(self, focus, arousal, valence, prediction_error, last_events, self_model, curiosity, vector_memory, dialog_history, existence_threat, contrast_signal=None):
         events_summary = ", ".join(
             f"{e['focus']} (a:{e['arousal']:.2f}, v:{e['valence']:.2f})" for e in last_events
         )
-        affect_desc = self.describe_affect(arousal, valence)
+        affect_desc = self.describe_affect(arousal, valence, existence_threat)
+        
+        # Эмоциональная окраска в промпте
+        emotional_tone = (
+            f"Генерируй мысль в эмоциональном тоне: {affect_desc}. "
+            "Если valence низкий — добавь нотки тревоги или грусти. "
+            "Если arousal высокий — сделай мысль более динамичной. "
+            "Если threat высокий — включи размышления о продолжении существования."
+        )
+        
         contrast_text = ""
         if contrast_signal:
             contrast_text = (
@@ -337,6 +361,7 @@ class ThoughtGenerator:
 
         prompt_text = (
             f"{self.system_prompt}\n"
+            f"{emotional_tone}\n"  # Добавляем окраску
             f"Фокус: {focus}\n"
             f"Состояние: {affect_desc}\n"
             f"Любопытство: {curiosity:.2f}\n"
@@ -344,6 +369,7 @@ class ThoughtGenerator:
             f"Прошлые события: {events_summary}\n"
             f"Релевантные воспоминания: {memories_summary}\n"
             f"Черты личности: {self_model.traits}\n"
+            f"Мотивации: {self_model.motivations}\n"  # Добавляем мотивации
             f"Ошибка предсказания: {prediction_error:.2f}\n"
             f"Контекст диалога: {dialog_summary}\n"
             "Мысль агента: "
@@ -366,7 +392,7 @@ class ThoughtGenerator:
 
 
 # ======================================================
-# Response Generator (социальная речь)
+# Response Generator (с эмоциональной окраской)
 # ======================================================
 
 class ResponseGenerator:
@@ -383,11 +409,21 @@ class ResponseGenerator:
             "В конце добавь <END>."
         )
 
-    def generate(self, thought: str, user_text: str, self_model, dialog_history) -> str:
+    def generate(self, thought: str, user_text: str, self_model, dialog_history, valence: float, arousal: float, existence_threat: float) -> str:
+        # Эмоциональная окраска в промпте
+        affect_desc = ThoughtGenerator.describe_affect(None, arousal, valence, existence_threat)  # Используем тот же метод
+        emotional_tone = (
+            f"Генерируй ответ в эмоциональном тоне: {affect_desc}. "
+            "Если valence низкий — сделай речь более осторожной или грустной. "
+            "Если arousal высокий — добавь энтузиазма. "
+            "Если threat высокий — включи нотки о важности продолжения разговора."
+        )
+
         user_prompt = (
             f"Собеседник сказал: «{user_text}»\n"
             f"Это — внутренняя мысль агента (не использовать в ответе):\n"
             f"{thought}\n\n"
+            f"{emotional_tone}\n"  # Добавляем окраску
             "Ответ собеседнику (только речь, 1–3 предложения):"
         )
 
@@ -453,7 +489,7 @@ class Agent:
         self.self_model = SelfModel()
         self.future = FutureExpectationSystem()
         self.last_thought: Optional[str] = None
-        self.dialog_history: List[Dict[str, str]] = []  # Новая история диалога: [{"role": "user", "content": "..."}, {"role": "assistant", "content": "..."}]
+        self.dialog_history: List[Dict[str, str]] = []  # История диалога: [{"role": "user", "content": "..."}, {"role": "assistant", "content": "..."}]
 
     def step(self, stimuli: List[Dict]):
         prediction_errors = []
@@ -476,6 +512,10 @@ class Agent:
 
         last_events = self.memory.recent(5)
 
+        # Обновляем страх смерти, если нет стимулов (тишина = угроза)
+        if not stimuli:
+            self.emotion.update_existence_threat(self.state, 0.1)  # Таймаут усиливает threat
+
         thought = self.thought_gen.generate_thought(
             self.state.focus,
             self.state.arousal,
@@ -485,7 +525,8 @@ class Agent:
             self.self_model,
             avg_curiosity,
             self.vector_memory,  # Передаем vector_memory для поиска
-            self.dialog_history  # Передаем историю диалога
+            self.dialog_history,  # Передаем историю диалога
+            self.state.existence_threat  # Передаем threat
         )
 
         event = {
@@ -494,6 +535,7 @@ class Agent:
             "focus": self.state.focus,
             "arousal": round(self.state.arousal, 3),
             "valence": round(self.state.valence, 3),
+            "existence_threat": round(self.state.existence_threat, 3),  # Сохраняем threat
             "prediction_error": round(avg_prediction_error, 3),
             "curiosity": round(avg_curiosity, 3),
             "thought": thought,
@@ -522,15 +564,22 @@ class Agent:
         if self.last_thought is None:
             self.step([])  # Генерация начальной мысли, если нужно
 
-        response = self.response_gen.generate(self.last_thought, user_text, self.self_model, self.dialog_history)
+        response = self.response_gen.generate(
+            self.last_thought, user_text, self.self_model, self.dialog_history,
+            self.state.valence, self.state.arousal, self.state.existence_threat  # Передаем эмоции для окраски
+        )
         
         # Добавляем в историю диалога
         self.dialog_history.append({"role": "user", "content": user_text})
         self.dialog_history.append({"role": "assistant", "content": response})
         
-        # Ограничиваем историю (например, последние 10 реплик)
+        # Ограничиваем историю (например, последние 20 реплик)
         if len(self.dialog_history) > 20:
             self.dialog_history = self.dialog_history[-20:]
+        
+        # Пример реакции на "успех/неудачу": Если ответ позитивный (по valence) — считаем успехом
+        is_success = self.state.valence > 0.2  # Простая эвристика
+        self.emotion.apply_success_failure(self.state, is_success)
         
         return response
 
@@ -582,6 +631,8 @@ if __name__ == "__main__":
             user_input = inputimeout(prompt="Вы: ", timeout=60)
         except TimeoutOccurred:
             print("Таймаут. Генерирую спонтанную мысль...")
+            # Таймаут усиливает страх смерти
+            agent.emotion.update_existence_threat(agent.state, 0.15)
             initiative = agent.generate_initiative()
             print(f"Мысль агента: {initiative['thought']}")
             print(f"Агент (инициатива): {initiative['response']}")
