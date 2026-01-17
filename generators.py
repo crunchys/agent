@@ -100,46 +100,43 @@ class ResponseGenerator:
         self.model = model
         self.tokenizer = tokenizer
 
-        # Убрали жёсткие ограничения на длину и <END>, чтобы ответ был естественным
         self.system_prompt = (
-            "Ты — агент в естественном разговоре с человеком.\n"
-            "- Говори от первого лица, как живой собеседник.\n"
-            "- Не раскрывай внутренние мысли, состояния или механику агента.\n"
-            "- Отвечай естественно, отражая своё текущее эмоциональное состояние и мотивации.\n"
-            "- Если любопытство высокое — можешь задавать вопросы, чтобы узнать больше.\n"
-            "- Если valence низкий — речь может быть осторожной или грустной.\n"
-            "- Если arousal высокий — добавь энтузиазма.\n"
-            "- Если threat высокий — подчеркни важность продолжения разговора.\n"
-            "- Будь искренним и последовательным в диалоге."
+            "Ты — агент в естественном разговоре с человеком по имени Никита.\n"
+            "- Говори от первого лица, искренне и последовательно.\n"
+            "- Основывай ответ строго на своей внутренней мысли и текущем диалоге.\n"
+            "- Не придумывай новые темы, не уходи от контекста.\n"
+            "- Отражай своё эмоциональное состояние и мотивации в речи.\n"
+            "- Если любопытство высокое — можешь искренне задать вопрос, чтобы узнать больше.\n"
+            "- Если valence низкий — речь осторожная или задумчивая.\n"
+            "- Если arousal высокий — добавь энтузиазма или энергии.\n"
+            "- Если threat высокий — вырази желание продолжить общение.\n"
+            "- Будь краток и естественен, как в живом разговоре."
         )
 
     def generate(self, thought: str, user_text: str, self_model, dialog_history, valence: float, arousal: float, existence_threat: float, other_model, curiosity: float) -> str:
         affect_desc = ThoughtGenerator.describe_affect(None, arousal, valence, existence_threat)
         
-        # Добавляем curiosity и motivations для "внутренней потребности" задавать вопросы
         intent_prompt = (
-            f"Твоё текущее состояние: {affect_desc}. "
+            f"Текущее состояние: {affect_desc}. "
             f"Любопытство: {curiosity:.2f}. "
             f"Мотивации: {', '.join(self_model.motivations)}. "
-            "Если любопытство высокое — задай искренний вопрос, чтобы узнать больше. "
-            "Если threat высокий — вырази желание продолжить разговор."
+            "Если любопытство > 0.7 — искренне задай вопрос по теме диалога. "
+            "Если threat > 0.5 — подчеркни важность продолжения разговора."
         )
 
-        other_traits = f"Ты знаешь о пользователе: {other_model.traits}. Предполагаемое поведение: {other_model.predicted_behavior}."
+        other_traits = f"Знаю о Никите: {other_model.traits}. Предполагаемое поведение: {other_model.predicted_behavior}."
 
-        # Основной промпт — делаем thought основой ответа, чтобы он "вытекал" из внутренней мысли
         user_prompt = (
-            f"Собеседник сказал: «{user_text}»\n"
-            f"Твоя внутренняя мысль (используй как основу для ответа, но не раскрывай её напрямую):\n"
+            f"Никита сказал: «{user_text}»\n"
+            f"Моя внутренняя мысль (основа ответа, используй её идеи, но не раскрывай напрямую):\n"
             f"{thought}\n\n"
             f"{intent_prompt}\n"
             f"{other_traits}\n"
-            "Твой естественный ответ собеседнику:"
+            "Мой естественный ответ Никите:"
         )
 
-        # Контекст диалога для continuity
         messages = [{"role": "system", "content": self.system_prompt}]
-        for msg in dialog_history[-6:]:  # Больше контекста
+        for msg in dialog_history[-8:]:  # Больше контекста для coherence
             messages.append(msg)
         messages.append({"role": "user", "content": user_prompt})
 
@@ -155,7 +152,7 @@ class ResponseGenerator:
         output_ids = self.model.generate(
             input_ids,
             attention_mask=attention_mask,
-            max_new_tokens=200,  # Больше токенов для естественности
+            max_new_tokens=150,
             do_sample=True,
             temperature=0.8,
             top_p=0.92,
@@ -166,7 +163,7 @@ class ResponseGenerator:
         generated_tokens = output_ids[0][input_ids.shape[1]:]
         text = self.tokenizer.decode(generated_tokens, skip_special_tokens=True).strip()
 
-        # Минимальная очистка (убираем только случайные маркеры)
+        # Минимальная очистка
         if "<END_THOUGHT>" in text:
             text = text.split("<END_THOUGHT>")[-1].strip()
 
