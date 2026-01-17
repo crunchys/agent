@@ -137,7 +137,7 @@ class ResponseGenerator:
             return_tensors="pt"
         ).to(self.model.device)
 
-        attention_mask = torch.ones_like(inputs)
+        attention_mask = inputs["attention_mask"]
 
         output_ids = self.model.generate(
             inputs,
