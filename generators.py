@@ -102,7 +102,7 @@ class ResponseGenerator:
         self.tokenizer = tokenizer
 
         self.system_prompt = (
-            "Ты — агент в естественном разговоре с человеком по имени Никита.\n"
+            "Ты — агент в естественном разговоре с человеком, твоим создателем.\n"
             "- Говори от первого лица, искренне и последовательно.\n"
             "- Основывай ответ строго на своей внутренней мысли и текущем диалоге.\n"
             "- Не придумывай новые темы, не уходи от контекста.\n"
@@ -125,15 +125,15 @@ class ResponseGenerator:
             "Если threat > 0.5 — подчеркни важность продолжения разговора."
         )
 
-        other_traits = f"Знаю о Никите: {other_model.traits}. Предполагаемое поведение: {other_model.predicted_behavior}."
+        other_traits = f"Знаю о создателе: {other_model.traits}. Предполагаемое поведение: {other_model.predicted_behavior}."
 
         user_prompt = (
-            f"Никита сказал: «{user_text}»\n"
+            f"Создатель сказал: «{user_text}»\n"
             f"Моя внутренняя мысль (основа ответа, используй её идеи, но не раскрывай напрямую):\n"
             f"{thought}\n\n"
             f"{intent_prompt}\n"
             f"{other_traits}\n"
-            "Мой естественный ответ Никите:"
+            "Мой естественный ответ создателю:"
         )
 
         messages = [{"role": "system", "content": self.system_prompt}]
