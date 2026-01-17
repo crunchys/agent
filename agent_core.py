@@ -59,7 +59,7 @@ class Agent:
 
         # Обновляем страх смерти, если нет стимулов (тишина = угроза)
         if not stimuli:
-            self.emotion.update_existence_threat(self.state, 0.1)  # Таймаут усиливает threat
+            self.emotion.update_existence_threat(self.state, 0.05)  # Таймаут усиливает threat
 
         thought = self.thought_gen.generate_thought(
             self.state.focus,
