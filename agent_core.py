@@ -104,35 +104,51 @@ class Agent:
         return thought
 
     def respond(self, user_text: str) -> str:
+        # Обязательно добавляем ввод пользователя в историю до генерации
+        self.dialog_history.append({"role": "user", "content": user_text})
+
         if self.last_thought is None:
-            self.step([])  # Генерация начальной мысли, если нужно
+            # Если ещё не было мыслей — прогнать шаг без стимулов
+            self.step([])
 
         # Обновляем модель других перед ответом
         self.other_model.update_traits(user_text, self.response_gen.model, self.response_gen.tokenizer)
-        predicted_user_behavior = self.other_model.predict_behavior(self.dialog_history, self.response_gen.model, self.response_gen.tokenizer)
-
-        response = self.response_gen.generate(
-            self.last_thought, user_text, self.self_model, self.dialog_history,
-            self.state.valence, self.state.arousal, self.state.existence_threat,  # Эмоции
-            self.other_model  # Передаем модель других
+        predicted_user_behavior = self.other_model.predict_behavior(
+            self.dialog_history, self.response_gen.model, self.response_gen.tokenizer
         )
-        
-        # Добавляем в историю диалога
-        self.dialog_history.append({"role": "user", "content": user_text})
+
+        # Генерируем ответ
+        response = self.response_gen.generate(
+            self.last_thought,
+            user_text,
+            self.self_model,
+            self.dialog_history,
+            self.state.valence,
+            self.state.arousal,
+            self.state.existence_threat,
+            self.other_model
+        )
+
+        # Теперь добавляем ответ в историю
         self.dialog_history.append({"role": "assistant", "content": response})
-        
-        # Ограничиваем историю (последние 20 реплик)
+
+        # Сохраняем ограниченную длину истории (последние 20)
         if len(self.dialog_history) > 20:
             self.dialog_history = self.dialog_history[-20:]
-        
-        # Реакция на успех/неудачу
-        is_success = self.state.valence > 0.2  # Простая эвристика
+
+        # Реакция на успех/неудачу по простой эвристике
+        is_success = self.state.valence > 0.2
         self.emotion.apply_success_failure(self.state, is_success)
-        
-        # Метапознание: Оцениваем ответ
+
+        # Метапознание: оцениваем ответ
         action_desc = f"Ответил на '{user_text[:20]}...' с текстом '{response[:20]}...'."
-        self.last_self_evaluation = self.self_model.evaluate_action(action_desc, self.state.valence, self.response_gen.model, self.response_gen.tokenizer)
-        
+        self.last_self_evaluation = self.self_model.evaluate_action(
+            action_desc,
+            self.state.valence,
+            self.response_gen.model,
+            self.response_gen.tokenizer
+        )
+
         return response
 
     def generate_initiative(self) -> Dict[str, float | str]:
