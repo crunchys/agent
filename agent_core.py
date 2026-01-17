@@ -42,6 +42,10 @@ def load_model_and_tokenizer(model_name="Qwen/Qwen2.5-3B-Instruct", hf_token=Non
             padding_side="left"
         )
 
+        # Важно: Устанавливаем pad_token явно, чтобы избежать issues
+        if _TOKENIZER.pad_token is None:
+            _TOKENIZER.pad_token = _TOKENIZER.eos_token
+
         _MODEL = AutoModelForCausalLM.from_pretrained(
             model_name,
             token=hf_token,
@@ -217,8 +221,10 @@ class MetaReflection:
             "Начни с 'Из этого я понял, что...'."
         )
         inputs = self.tokenizer(prompt, return_tensors="pt").to(self.model.device)
+        attention_mask = torch.ones_like(inputs["input_ids"])  # Добавляем маску
         output_ids = self.model.generate(
             **inputs,
+            attention_mask=attention_mask,
             max_new_tokens=100,
             do_sample=True,
             temperature=0.8,
@@ -278,8 +284,10 @@ class SelfModel:
             "Начни с 'Это действие было...'."
         )
         inputs = tokenizer(prompt, return_tensors="pt").to(model.device)
+        attention_mask = torch.ones_like(inputs["input_ids"])
         output_ids = model.generate(
             **inputs,
+            attention_mask=attention_mask,
             max_new_tokens=50,
             do_sample=True,
             temperature=0.7
@@ -317,7 +325,12 @@ class OtherModel:
             "Верни: любопытство: [0-1], агрессивность: [0-1]. Кратко."
         )
         inputs = tokenizer(prompt, return_tensors="pt").to(model.device)
-        output_ids = model.generate(**inputs, max_new_tokens=50)
+        attention_mask = torch.ones_like(inputs["input_ids"])
+        output_ids = model.generate(
+            **inputs,
+            attention_mask=attention_mask,
+            max_new_tokens=50
+        )
         eval_text = tokenizer.decode(output_ids[0], skip_special_tokens=True).replace(prompt, "").strip()
         
         # Парсим (простая эвристика)
@@ -336,7 +349,12 @@ class OtherModel:
             "Предскажи, что пользователь скажет или сделает дальше. Кратко: 1 предложение."
         )
         inputs = tokenizer(prompt, return_tensors="pt").to(model.device)
-        output_ids = model.generate(**inputs, max_new_tokens=50)
+        attention_mask = torch.ones_like(inputs["input_ids"])
+        output_ids = model.generate(
+            **inputs,
+            attention_mask=attention_mask,
+            max_new_tokens=50
+        )
         self.predicted_behavior = tokenizer.decode(output_ids[0], skip_special_tokens=True).replace(prompt, "").strip()
         return self.predicted_behavior
 
@@ -449,8 +467,10 @@ class ThoughtGenerator:
         )
 
         enc = self.tokenizer(prompt_text, return_tensors="pt").to(self.model.device)
+        attention_mask = torch.ones_like(enc["input_ids"])  # Добавляем маску
         output_ids = self.model.generate(
             **enc,
+            attention_mask=attention_mask,
             max_new_tokens=150,
             do_sample=True,
             temperature=1.0,
@@ -516,8 +536,11 @@ class ResponseGenerator:
             return_tensors="pt"
         ).to(self.model.device)
 
+        attention_mask = torch.ones_like(inputs)  # Добавляем маску (inputs - tensor input_ids)
+
         output_ids = self.model.generate(
             inputs,
+            attention_mask=attention_mask,
             max_new_tokens=120,
             do_sample=True,
             temperature=0.7,
