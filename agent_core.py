@@ -96,7 +96,7 @@ class MentalState:
     valence: float
     focus: Optional[str]
     timestamp: float
-    existence_threat: float = 0.0  # Новый: страх "конца" (от 0.0 до 1.0)
+    existence_threat: float = 0.0  # Страх "конца" (от 0.0 до 1.0)
 
     @classmethod
     def initial(cls):
@@ -236,7 +236,7 @@ class MetaReflection:
 
 
 # ======================================================
-# Self Model
+# Self Model (расширен метапознанием)
 # ======================================================
 
 @dataclass
@@ -245,7 +245,8 @@ class SelfModel:
     traits: Dict[str, float] = None
     goals: List[str] = None
     lessons: List[str] = None
-    motivations: List[str] = None  # Новый: мотивации/ценности
+    motivations: List[str] = None
+    self_evaluations: List[str] = None  # Новый: список самооценок действий
 
     def __post_init__(self):
         if self.traits is None:
@@ -255,7 +256,9 @@ class SelfModel:
         if self.lessons is None:
             self.lessons = []
         if self.motivations is None:
-            self.motivations = ['избегать неудач', 'искать знания', 'поддерживать существование']  # Базовые мотивации
+            self.motivations = ['избегать неудач', 'искать знания', 'поддерживать существование']
+        if self.self_evaluations is None:
+            self.self_evaluations = []
 
     def reflect(self, state: MentalState, memory: EpisodicMemory, new_lesson: Optional[str] = None):
         recent = memory.recent(5)
@@ -264,9 +267,78 @@ class SelfModel:
         
         if new_lesson:
             self.lessons.append(new_lesson)
-            # Обновляем traits на основе урока (пример: если урок негативный - уменьшаем смелость)
             if "ошиб" in new_lesson.lower() or "неудач" in new_lesson.lower():
                 self.traits['смелость'] = max(0.0, self.traits['смелость'] - 0.1)
+
+    def evaluate_action(self, action_desc: str, outcome_valence: float, model, tokenizer):
+        """Метапознание: Оценка действия"""
+        prompt = (
+            f"Оцени это действие: {action_desc}. Исход (valence): {outcome_valence:.2f}. "
+            "Было ли оно полезным/вредным? Кратко: 1-2 предложения на русском. "
+            "Начни с 'Это действие было...'."
+        )
+        inputs = tokenizer(prompt, return_tensors="pt").to(model.device)
+        output_ids = model.generate(
+            **inputs,
+            max_new_tokens=50,
+            do_sample=True,
+            temperature=0.7
+        )
+        evaluation = tokenizer.decode(output_ids[0], skip_special_tokens=True).replace(prompt, "").strip()
+        self.self_evaluations.append(evaluation)
+        
+        # Обновляем traits на основе оценки
+        if "вредным" in evaluation.lower() or "ошиб" in evaluation.lower():
+            self.traits['смелость'] -= 0.05
+        elif "полезным" in evaluation.lower():
+            self.traits['любопытство'] += 0.05
+        
+        return evaluation
+
+
+# ======================================================
+# Other Model (модель других, e.g., пользователя)
+# ======================================================
+
+@dataclass
+class OtherModel:
+    name: str = "Пользователь"
+    traits: Dict[str, float] = None  # Оценки черт пользователя
+    predicted_behavior: str = ""     # Предсказание следующего действия
+
+    def __post_init__(self):
+        if self.traits is None:
+            self.traits = {'любопытство': 0.5, 'агрессивность': 0.0}  # Базовые
+
+    def update_traits(self, user_text: str, model, tokenizer):
+        """Обновление черт на основе текста пользователя"""
+        prompt = (
+            f"Оцени черты пользователя по тексту: '{user_text}'. "
+            "Верни: любопытство: [0-1], агрессивность: [0-1]. Кратко."
+        )
+        inputs = tokenizer(prompt, return_tensors="pt").to(model.device)
+        output_ids = model.generate(**inputs, max_new_tokens=50)
+        eval_text = tokenizer.decode(output_ids[0], skip_special_tokens=True).replace(prompt, "").strip()
+        
+        # Парсим (простая эвристика)
+        try:
+            parts = eval_text.split(',')
+            self.traits['любопытство'] = float(parts[0].split(':')[1].strip())
+            self.traits['агрессивность'] = float(parts[1].split(':')[1].strip())
+        except:
+            pass  # Если ошибка — не обновляем
+
+    def predict_behavior(self, dialog_history: List[Dict], model, tokenizer):
+        """Предсказание поведения пользователя"""
+        history_summary = "\n".join(f"{msg['role']}: {msg['content']}" for msg in dialog_history[-3:])
+        prompt = (
+            f"На основе диалога: {history_summary}. "
+            "Предскажи, что пользователь скажет или сделает дальше. Кратко: 1 предложение."
+        )
+        inputs = tokenizer(prompt, return_tensors="pt").to(model.device)
+        output_ids = model.generate(**inputs, max_new_tokens=50)
+        self.predicted_behavior = tokenizer.decode(output_ids[0], skip_special_tokens=True).replace(prompt, "").strip()
+        return self.predicted_behavior
 
 
 # ======================================================
@@ -327,7 +399,7 @@ class ThoughtGenerator:
         threat_desc = f", с ощущением угрозы ({existence_threat:.2f})" if existence_threat > 0.3 else ""
         return f"{arousal_desc}, {valence_desc}{threat_desc}"
 
-    def generate_thought(self, focus, arousal, valence, prediction_error, last_events, self_model, curiosity, vector_memory, dialog_history, existence_threat, contrast_signal=None):
+    def generate_thought(self, focus, arousal, valence, prediction_error, last_events, self_model, curiosity, vector_memory, dialog_history, existence_threat, self_evaluation: str, contrast_signal=None):
         events_summary = ", ".join(
             f"{e['focus']} (a:{e['arousal']:.2f}, v:{e['valence']:.2f})" for e in last_events
         )
@@ -370,6 +442,7 @@ class ThoughtGenerator:
             f"Релевантные воспоминания: {memories_summary}\n"
             f"Черты личности: {self_model.traits}\n"
             f"Мотивации: {self_model.motivations}\n"  # Добавляем мотивации
+            f"Самооценка последнего действия: {self_evaluation}\n"  # Добавляем метапознание
             f"Ошибка предсказания: {prediction_error:.2f}\n"
             f"Контекст диалога: {dialog_summary}\n"
             "Мысль агента: "
@@ -409,7 +482,7 @@ class ResponseGenerator:
             "В конце добавь <END>."
         )
 
-    def generate(self, thought: str, user_text: str, self_model, dialog_history, valence: float, arousal: float, existence_threat: float) -> str:
+    def generate(self, thought: str, user_text: str, self_model, dialog_history, valence: float, arousal: float, existence_threat: float, other_model) -> str:
         # Эмоциональная окраска в промпте
         affect_desc = ThoughtGenerator.describe_affect(None, arousal, valence, existence_threat)  # Используем тот же метод
         emotional_tone = (
@@ -419,11 +492,15 @@ class ResponseGenerator:
             "Если threat высокий — включи нотки о важности продолжения разговора."
         )
 
+        # Добавляем модель других в промпт
+        other_traits = f"Черты пользователя: {other_model.traits}. Предполагаемое поведение: {other_model.predicted_behavior}."
+
         user_prompt = (
             f"Собеседник сказал: «{user_text}»\n"
             f"Это — внутренняя мысль агента (не использовать в ответе):\n"
             f"{thought}\n\n"
             f"{emotional_tone}\n"  # Добавляем окраску
+            f"{other_traits}\n"   # Добавляем модель других
             "Ответ собеседнику (только речь, 1–3 предложения):"
         )
 
@@ -487,9 +564,11 @@ class Agent:
         self.thought_gen = ThoughtGenerator(model=model, tokenizer=tokenizer)
         self.response_gen = ResponseGenerator(model=model, tokenizer=tokenizer)
         self.self_model = SelfModel()
+        self.other_model = OtherModel()  # Новая модель других (пользователя)
         self.future = FutureExpectationSystem()
         self.last_thought: Optional[str] = None
-        self.dialog_history: List[Dict[str, str]] = []  # История диалога: [{"role": "user", "content": "..."}, {"role": "assistant", "content": "..."}]
+        self.dialog_history: List[Dict[str, str]] = []  # История диалога
+        self.last_self_evaluation: str = ""  # Последняя самооценка
 
     def step(self, stimuli: List[Dict]):
         prediction_errors = []
@@ -526,7 +605,8 @@ class Agent:
             avg_curiosity,
             self.vector_memory,  # Передаем vector_memory для поиска
             self.dialog_history,  # Передаем историю диалога
-            self.state.existence_threat  # Передаем threat
+            self.state.existence_threat,  # Передаем threat
+            self.last_self_evaluation  # Передаем последнюю самооценку
         )
 
         event = {
@@ -564,22 +644,31 @@ class Agent:
         if self.last_thought is None:
             self.step([])  # Генерация начальной мысли, если нужно
 
+        # Обновляем модель других перед ответом
+        self.other_model.update_traits(user_text, self.response_gen.model, self.response_gen.tokenizer)
+        predicted_user_behavior = self.other_model.predict_behavior(self.dialog_history, self.response_gen.model, self.response_gen.tokenizer)
+
         response = self.response_gen.generate(
             self.last_thought, user_text, self.self_model, self.dialog_history,
-            self.state.valence, self.state.arousal, self.state.existence_threat  # Передаем эмоции для окраски
+            self.state.valence, self.state.arousal, self.state.existence_threat,  # Эмоции
+            self.other_model  # Передаем модель других
         )
         
         # Добавляем в историю диалога
         self.dialog_history.append({"role": "user", "content": user_text})
         self.dialog_history.append({"role": "assistant", "content": response})
         
-        # Ограничиваем историю (например, последние 20 реплик)
+        # Ограничиваем историю (последние 20 реплик)
         if len(self.dialog_history) > 20:
             self.dialog_history = self.dialog_history[-20:]
         
-        # Пример реакции на "успех/неудачу": Если ответ позитивный (по valence) — считаем успехом
+        # Реакция на успех/неудачу
         is_success = self.state.valence > 0.2  # Простая эвристика
         self.emotion.apply_success_failure(self.state, is_success)
+        
+        # Метапознание: Оцениваем ответ
+        action_desc = f"Ответил на '{user_text[:20]}...' с текстом '{response[:20]}...'."
+        self.last_self_evaluation = self.self_model.evaluate_action(action_desc, self.state.valence, self.response_gen.model, self.response_gen.tokenizer)
         
         return response
 
