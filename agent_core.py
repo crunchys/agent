@@ -34,6 +34,7 @@ class Agent:
         self.dialog_history: List[Dict[str, str]] = []  # История диалога
         self.last_self_evaluation: str = ""  # Последняя самооценка
         self.current_curiosity: float = 0.0  # Текущее любопытство для передачи в генератор ответа
+        self.emotion_system = EmotionSystem()
 
     def step(self, stimuli: List[Dict]):
         prediction_errors = []
