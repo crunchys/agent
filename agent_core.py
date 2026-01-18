@@ -90,6 +90,7 @@ class Agent:
             avg_prediction_error,
             last_events,
             self.self_model,
+            self.emotion_system,
             avg_curiosity,
             self.vector_memory,
             self.dialog_history,
