@@ -8,11 +8,13 @@ class EmotionSystem:
     def apply_stimulus(self, state, stimulus: Dict):
         state.arousal = min(1.0, state.arousal + stimulus["intensity"])
         state.valence = max(-1.0, min(1.0, state.valence + stimulus["valence"]))
+        # dominance не обновляется стимулом напрямую сейчас
         return state
 
     def decay(self, state):
         state.arousal *= (1 - self.decay_rate)
         state.valence *= (1 - self.decay_rate)
+        state.dominance *= (1 - self.decay_rate)
         state.existence_threat *= (1 - self.decay_rate * 0.5)
         return state
 
@@ -20,9 +22,11 @@ class EmotionSystem:
         if is_success:
             state.valence += 0.2
             state.arousal += 0.1
+            state.dominance += 0.05
         else:
             state.valence -= 0.3
             state.arousal += 0.2
+            state.dominance -= 0.1
             state.existence_threat += 0.1
 
     def update_existence_threat(self, state, threat_delta: float):
@@ -30,6 +34,33 @@ class EmotionSystem:
         if state.existence_threat > 0.5:
             state.arousal += 0.15
             state.valence -= 0.1
+
+    def get_current_emotion(self, state) -> str:
+        """
+        Дискретные эмоции на основе валентности/возбуждения/dominance
+        """
+        v = state.valence
+        a = state.arousal
+        d = state.dominance
+
+        # радость / энтузиазм
+        if v > 0.5 and a > 0.5:
+            return "joy"
+
+        # грусть
+        if v < -0.5 and a < 0.5:
+            return "sadness"
+
+        # страх: отрицательная валентность + высокая активация + низкий контроль
+        if v < -0.5 and a > 0.5 and d < -0.2:
+            return "fear"
+
+        # гнев
+        if v < -0.5 and a > 0.5 and d > 0.2:
+            return "anger"
+
+        # нейтральное состояние
+        return "neutral"
 
 class PredictionErrorSystem:
     def __init__(self):
