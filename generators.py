@@ -55,13 +55,13 @@ class ThoughtGenerator:
 
     def generate_thought(
             self, focus, arousal, valence, prediction_error,
-            last_events, self_model, curiosity, vector_memory,
+            last_events, self_model, curiosity, vector_memory, emotion_system,
             dialog_history, existence_threat, self_evaluation: str,
             contrast_signal=None
         ):
 
         # вычислим эмоциональную метку
-        emotion = self_model.emotion_system.get_current_emotion(self_model.state)
+        emotion = emotion_system.get_current_emotion(self_model.state)
 
         # формируем динамику sampling
         temperature, top_p = self.compute_sampling(arousal, emotion)
@@ -138,7 +138,7 @@ class ResponseGenerator:
     def generate(self, thought: str, user_text: str, self_model, dialog_history, valence: float, arousal: float, existence_threat: float, other_model) -> str:
 
         # получаем текущую эмоцию
-        emotion = self_model.emotion_system.get_current_emotion(self_model.state)
+        emotion = emotion_system.get_current_emotion(self_model.state)
 
         # sampling
         temperature, top_p = self.compute_sampling(arousal, emotion)
