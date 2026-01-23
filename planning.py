@@ -1,87 +1,74 @@
 from dataclasses import dataclass
-from typing import List, Dict, Optional
+from typing import List, Optional
 from time import time
-import torch
 
 @dataclass
 class Goal:
     description: str
-    priority: float  # 0.0 - 1.0
-    steps: List[str] = None
+    priority: float
+    steps: List[str]
     progress: float = 0.0
     created_at: float = None
     status: str = "active"
 
     def __post_init__(self):
-        if self.steps is None:
-            self.steps = []
         if self.created_at is None:
             self.created_at = time()
 
 class Planner:
-    def __init__(self, model, tokenizer, self_model):
-        self.model = model
-        self.tokenizer = tokenizer
+    def __init__(self, self_model, future_system):
         self.self_model = self_model
+        self.future_system = future_system
         self.goals: List[Goal] = []
 
-    def form_goal(self, state, curiosity: float, threat: float) -> Optional[Goal]:
-        prompt = (
-            f"Состояние: arousal={state.arousal:.2f}, valence={state.valence:.2f}, threat={threat:.2f}, curiosity={curiosity:.2f}.\n"
-            f"Мотивации: {', '.join(self.self_model.motivations)}.\n"
-            "Сформулируй одну реалистичную цель для разговора с человеком (1 предложение). "
-            "Или верни 'нет цели'."
-        )
-        inputs = self.tokenizer(prompt, return_tensors="pt").to(self.model.device)
-        input_ids = inputs["input_ids"]
-        attention_mask = torch.ones_like(input_ids)
-        output_ids = self.model.generate(
-            input_ids,
-            attention_mask=attention_mask,
-            max_new_tokens=60,
-            temperature=0.8
-        )
-        goal_text = self.tokenizer.decode(output_ids[0], skip_special_tokens=True).replace(prompt, "").strip()
-        
-        if "нет цели" in goal_text.lower():
+    def form_goal(self, state, curiosity: float, threat: float, prediction_error: float) -> Optional[Goal]:
+        # Правила формирования цели (без LLM)
+        if curiosity > 0.7:
+            desc = "Узнать больше о собеседнике"
+            priority = curiosity
+        elif threat > 0.5:
+            desc = "Поддерживать разговор"
+            priority = threat
+        elif prediction_error > 0.6:
+            desc = "Разобраться в неожиданном событии"
+            priority = prediction_error
+        elif state.valence < -0.3:
+            desc = "Избежать негативных тем"
+            priority = -state.valence
+        else:
             return None
-        
-        priority = curiosity * 0.7 + threat * 0.2 + max(0, -state.valence) * 0.1
-        return Goal(description=goal_text, priority=min(1.0, priority))
 
-    def decompose_goal(self, goal: Goal) -> List[str]:
-        prompt = (
-            f"Цель: {goal.description}\n"
-            "Разбей на 3–5 простых шагов в разговоре (например, 'задать вопрос о...'). Нумеруй."
-        )
-        inputs = self.tokenizer(prompt, return_tensors="pt").to(self.model.device)
-        input_ids = inputs["input_ids"]
-        attention_mask = torch.ones_like(input_ids)
-        output_ids = self.model.generate(
-            input_ids,
-            attention_mask=attention_mask,
-            max_new_tokens=100,
-            temperature=0.7
-        )
-        steps_text = self.tokenizer.decode(output_ids[0], skip_special_tokens=True).replace(prompt, "").strip()
-        steps = [s.strip() for s in steps_text.split('\n') if s.strip() and s[0].isdigit()]
-        goal.steps = steps
-        return steps
+        # Простая декомпозиция правилами
+        if "Узнать больше" in desc:
+            steps = ["Задать вопрос о хобби", "Задать вопрос о работе", "Задать вопрос о планах"]
+        elif "Поддерживать разговор" in desc:
+            steps = ["Задать открытый вопрос", "Поделиться своим состоянием"]
+        else:
+            steps = ["Анализировать ситуацию", "Задать уточняющий вопрос"]
 
-    def update_progress(self, goal: Goal, success: bool):
-        delta = 0.3 if success else -0.1
-        goal.progress = min(1.0, max(0.0, goal.progress + delta))
-        if goal.progress >= 1.0:
-            goal.status = "completed"
-        elif goal.progress <= 0:
-            goal.status = "failed"
+        return Goal(description=desc, priority=priority, steps=steps)
 
-    def get_current_action(self) -> Optional[str]:
-        active_goals = [g for g in self.goals if g.status == "active"]
-        if not active_goals:
+    def simulate_outcome(self, action: str) -> float:
+        # Простая симуляция valence по действию (non-verbal reasoning)
+        if "задать вопрос" in action.lower():
+            return 0.3  # Положительный исход от любопытства
+        elif "избежать" in action.lower():
+            return 0.1
+        return 0.0
+
+    def choose_action(self) -> Optional[str]:
+        if not self.goals:
             return None
-        top_goal = max(active_goals, key=lambda g: g.priority)
-        step_idx = min(int(len(top_goal.steps) * top_goal.progress), len(top_goal.steps) - 1)
+        top_goal = max(self.goals, key=lambda g: g.priority)
+        step_idx = int(len(top_goal.steps) * top_goal.progress)
         if step_idx < len(top_goal.steps):
             return top_goal.steps[step_idx]
         return None
+
+    def update(self, success: bool):
+        for goal in self.goals:
+            goal.progress += 0.3 if success else -0.1
+            if goal.progress >= 1.0:
+                goal.status = "completed"
+            elif goal.progress <= 0:
+                goal.status = "failed"
