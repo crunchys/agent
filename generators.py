@@ -6,8 +6,10 @@ class ThoughtGenerator:
         self.model = model
         self.tokenizer = tokenizer
 
-    def generate_thought(self, state_summary: str) -> str:
+    def generate_thought(self, state_summary: str, role_identity: str = "") -> str:
+        role_part = f"Роль: {role_identity}\n" if role_identity else ""
         prompt_text = (
+            f"{role_part}"
             "Ты — внутренняя мысль агента, возникающая сама по себе.\n"
             "Озвучь это состояние естественно, как поток размышлений на русском языке.\n"
             "Стиль: живая внутренняя речь, с сомнениями, оглядкой на прошлый опыт, попыткой понять, что происходит.\n"
@@ -25,8 +27,9 @@ class ThoughtGenerator:
             attention_mask=attention_mask,
             max_new_tokens=150,
             do_sample=True,
-            temperature=1.0,
-            top_p=0.95
+            temperature=0.8,
+            top_p=0.9,
+            repetition_penalty=1.2
         )
 
         text = self.tokenizer.decode(output_ids[0], skip_special_tokens=True)
@@ -41,10 +44,12 @@ class ResponseGenerator:
         self.model = model
         self.tokenizer = tokenizer
 
-    def generate(self, state_summary: str, user_text: str, current_action: str = "") -> str:
+    def generate(self, state_summary: str, user_text: str, role_identity: str = "", current_action: str = "") -> str:
+        role_part = f"Роль: {role_identity}\n" if role_identity else ""
         action_part = f"Текущее действие по плану: {current_action}\n" if current_action else ""
 
         prompt_text = (
+            f"{role_part}"
             "Ты — агент в естественном разговоре с человеком.\n"
             "Озвучь ответ от первого лица, искренне и последовательно.\n"
             "Основывайся на состоянии и сообщении пользователя.\n"
@@ -64,8 +69,9 @@ class ResponseGenerator:
             attention_mask=attention_mask,
             max_new_tokens=150,
             do_sample=True,
-            temperature=0.8,
-            top_p=0.92,
+            temperature=0.7,
+            top_p=0.9,
+            repetition_penalty=1.2,
             pad_token_id=self.tokenizer.eos_token_id,
             eos_token_id=self.tokenizer.eos_token_id,
         )
