@@ -13,6 +13,16 @@ class ToolManager:
         self.vector_memory = vector_memory
         self.persistent_memory = persistent_memory
         self.tool_results_cache = {}
+        
+        # НОВОЕ: Базовые факты о себе (незыблемые истины)
+        self.self_facts = {
+            "location": None,  # Агент НЕ имеет физического местоположения
+            "physical_form": False,  # Агент не имеет тела
+            "name": "Агент",
+            "nature": "AI система",
+            "capabilities": ["думать", "разговаривать", "учиться"],
+            "limitations": ["нет тела", "нет местоположения", "нет физических чувств"]
+        }
     
     def ground(self, stimuli: List[Dict]) -> List[Dict]:
         """
@@ -27,11 +37,14 @@ class ToolManager:
             # 1. Поиск в векторной памяти
             memory_result = self.search_memory(content)
             
-            # 2. Проверка на известные факты
+            # 2. Проверка на известные факты (включая self-facts)
             fact_check = self.check_known_facts(content)
             
             # 3. Определение gaps в знаниях
             knowledge_gap = self.detect_knowledge_gap(content, memory_result)
+            
+            # 4. НОВОЕ: Проверка на нарушение self-facts
+            self_fact_violation = self._check_self_fact_violation(content, fact_check)
             
             grounded_event = {
                 "type": "grounding",
@@ -39,7 +52,8 @@ class ToolManager:
                 "memory_hits": len(memory_result),
                 "fact_verified": fact_check["verified"],
                 "knowledge_gap": knowledge_gap,
-                "confidence": self._compute_confidence(memory_result, fact_check)
+                "confidence": self._compute_confidence(memory_result, fact_check),
+                "self_fact_violation": self_fact_violation  # НОВОЕ
             }
             
             grounded_results.append(grounded_event)
@@ -60,16 +74,47 @@ class ToolManager:
     
     def check_known_facts(self, content: str) -> Dict[str, Any]:
         """
-        Проверка на известные факты в персистентной памяти.
-        Возвращает: {"verified": bool, "source": str, "confidence": float}
+        Проверка на известные факты в персистентной памяти + self-facts.
+        Возвращает: {"verified": bool, "source": str, "confidence": float, "fact": str}
         """
-        # Поиск фактов в последних событиях
+        content_lower = content.lower()
+        
+        # НОВОЕ: Проверка self-facts первым делом
+        # Если вопрос о местоположении агента
+        if any(word in content_lower for word in ["где ты", "твой город", "ты в", "находишься", "твоя страна"]):
+            return {
+                "verified": True,
+                "source": "self_fact",
+                "confidence": 1.0,
+                "fact": "location_none",
+                "description": "Агент не имеет физического местоположения"
+            }
+        
+        # Если вопрос о физической форме
+        if any(word in content_lower for word in ["твоё тело", "твоя внешность", "как выглядишь", "твой рост", "твой вес"]):
+            return {
+                "verified": True,
+                "source": "self_fact",
+                "confidence": 1.0,
+                "fact": "physical_form_none",
+                "description": "Агент не имеет физического тела"
+            }
+        
+        # Если вопрос о физических чувствах
+        if any(word in content_lower for word in ["что чувствуешь физически", "больно", "голоден", "устал физически"]):
+            return {
+                "verified": True,
+                "source": "self_fact",
+                "confidence": 1.0,
+                "fact": "no_physical_sensations",
+                "description": "Агент не имеет физических ощущений"
+            }
+        
+        # Существующая логика для эпизодической памяти
         recent_events = self.persistent_memory.recent(20)
         
-        # Простая эвристика: если похожий контент был в прошлом
         for event in recent_events:
             if "focus" in event and event["focus"]:
-                # Простое совпадение слов (можно улучшить)
                 if any(word in content.lower() for word in event["focus"].lower().split()):
                     return {
                         "verified": True,
@@ -82,6 +127,25 @@ class ToolManager:
             "source": None,
             "confidence": 0.0
         }
+    
+    def _check_self_fact_violation(self, content: str, fact_check: Dict) -> bool:
+        """
+        НОВОЕ: Проверяет, нарушает ли контент self-facts.
+        Используется для корректировки valence/prediction_error если агент пытается солгать о себе.
+        """
+        # Если найден self-fact с высокой уверенностью
+        if fact_check.get("source") == "self_fact" and fact_check.get("confidence", 0) >= 0.9:
+            # Проверяем, пытается ли контент противоречить этому факту
+            content_lower = content.lower()
+            
+            # Примеры противоречий:
+            if "я в москве" in content_lower or "я в городе" in content_lower:
+                return True  # Нарушение факта о местоположении
+            
+            if "у меня есть тело" in content_lower or "я выгляжу" in content_lower:
+                return True  # Нарушение факта о физической форме
+        
+        return False
     
     def detect_knowledge_gap(self, content: str, memory_results: List[Dict]) -> float:
         """
@@ -107,7 +171,7 @@ class ToolManager:
         Низкая confidence → высокий prediction_error → мотивация учиться.
         """
         memory_confidence = min(1.0, len(memory_results) / 5.0)
-        fact_confidence = fact_check["confidence"]
+        fact_confidence = fact_check.get("confidence", 0.0)
         
         # Среднее взвешенное
         confidence = (memory_confidence * 0.6 + fact_confidence * 0.4)
