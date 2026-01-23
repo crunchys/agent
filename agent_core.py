@@ -12,92 +12,74 @@ import random
 from time import time
 import torch
 
+
 class Agent:
     def __init__(self, hf_token=None):
-        # Загружаем модель один раз
         model, tokenizer = load_model_and_tokenizer(hf_token=hf_token)
         
         self.state = MentalState.initial()
         self.emotion = EmotionSystem()
         self.attention = AttentionSystem()
         self.prediction = PredictionErrorSystem()
-        self.memory = PersistentMemory("memory.json")  # Эпизодическая память
-        self.vector_memory = VectorMemory()  # Векторная память (Faiss)
-        self.meta = MetaReflection(model=model, tokenizer=tokenizer)
+        self.memory = PersistentMemory("memory.json")
+        self.vector_memory = VectorMemory()
+        self.meta = MetaReflection()  # Без model/tokenizer
         self.thought_gen = ThoughtGenerator(model=model, tokenizer=tokenizer)
         self.response_gen = ResponseGenerator(model=model, tokenizer=tokenizer)
         self.self_model = SelfModel()
-        self.other_model = OtherModel()  # Новая модель других (пользователя)
+        self.other_model = OtherModel()
         self.future = FutureExpectationSystem()
-        self.planner = Planner(model=model, tokenizer=tokenizer, self_model=self.self_model)
+        self.planner = Planner(self.self_model, self.future)  # Новый planner
         self.last_thought: Optional[str] = None
-        self.dialog_history: List[Dict[str, str]] = []  # История диалога
-        self.last_self_evaluation: str = ""  # Последняя самооценка
-        self.current_curiosity: float = 0.0  # Текущее любопытство для передачи в генератор ответа
-        self.emotion_system = EmotionSystem()
+        self.dialog_history: List[Dict[str, str]] = []
 
     def step(self, stimuli: List[Dict]):
-        prediction_errors = []
-        curiosity = 0.0
-
-        for s in stimuli:
-            pe = self.prediction.compute(s)
-            s["prediction_error"] = pe
-            prediction_errors.append(pe)
-            s["curiosity"] = self.future.curiosity(s["content"])
-            curiosity += s["curiosity"]
-
+        # 1. Prediction Error
+        prediction_errors = [self.prediction.compute(s) for s in stimuli]
         avg_prediction_error = sum(prediction_errors) / len(prediction_errors) if prediction_errors else 0.0
-        avg_curiosity = curiosity / len(stimuli) if stimuli else 0.0
 
-        # Сохраняем текущее любопытство для использования в ответе
-        self.current_curiosity = avg_curiosity
-
-        # Планирование
-        if random.random() < 0.4 or not self.planner.goals:  # Чаще проверяем цели
-            new_goal = self.planner.form_goal(self.state, avg_curiosity, self.state.existence_threat)
-            if new_goal:
-                self.planner.decompose_goal(new_goal)
-                self.planner.goals.append(new_goal)
-                print(f"[ПЛАНИРОВАНИЕ] Новая цель: {new_goal.description}")
-
-        # Обновляем прогресс по активным целям
-        if stimuli:
-            is_success = self.state.valence > 0
-            for goal in self.planner.goals[:]:
-                if goal.status == "active":
-                    self.planner.update_progress(goal, is_success)
-                    if goal.status != "active":
-                        print(f"[ПЛАНИРОВАНИЕ] Цель '{goal.description}' {goal.status}")
-
-        # Очищаем завершённые/проваленные цели (оставляем 5 последних)
-        self.planner.goals = [g for g in self.planner.goals if g.status == "active"][-5:]
-
-        for s in stimuli:
-            self.emotion.apply_stimulus(self.state, s)
-
+        # 2. Attention
         self.state.focus = self.attention.select_focus(stimuli)
 
+        # 3. Emotion update
+        for s in stimuli:
+            self.emotion.apply_stimulus(self.state, s)
+        self.emotion.decay(self.state)
+
+        # 4. Tool use / Grounding
+        if stimuli:
+            query = stimuli[0]["content"]
+            relevant_memories = self.vector_memory.search(query, k=3)  # Grounding в памяти
+
+        # 5. Self-model update
         last_events = self.memory.recent(5)
+        self.self_model.reflect(self.state, self.memory)
 
-        # Обновляем страх смерти, если нет стимулов (тишина = угроза)
-        if not stimuli:
-            self.emotion.update_existence_threat(self.state, 0.05)  # Таймаут усиливает threat
+        # 6. Meta reflection (правила)
+        meta_ref = self.meta.reflect(self.memory)
+        if meta_ref:
+            self.memory.store(meta_ref)
+            self.self_model.reflect(self.state, self.memory, new_lesson=meta_ref.get("lesson"))
 
-        thought = self.thought_gen.generate_thought(
-            self.state.focus,
-            self.state.arousal,
-            self.state.valence,
-            avg_prediction_error,
-            last_events,
-            self.self_model,
-            self.emotion_system,
-            avg_curiosity,
-            self.vector_memory,
-            self.dialog_history,
-            self.state.existence_threat,
-            self.last_self_evaluation
+        # 7. Planning (non-verbal)
+        new_goal = self.planner.form_goal(self.state, self.future.curiosity(stimuli[0]["content"] if stimuli else ""), self.state.existence_threat, avg_prediction_error)
+        if new_goal:
+            self.planner.goals.append(new_goal)
+        
+        current_action = self.planner.choose_action()
+        is_success = self.state.valence > 0.2
+        self.planner.update(is_success)
+
+        # 8. Vocalization (LLM только здесь)
+        state_summary = (
+            f"Фокус: {self.state.focus}\n"
+            f"Состояние: arousal={self.state.arousal:.2f}, valence={self.state.valence:.2f}, threat={self.state.existence_threat:.2f}\n"
+            f"Текущая цель: {self.planner.goals[0].description if self.planner.goals else 'нет'}\n"
+            f"Текущее действие: {current_action or 'нет'}\n"
+            f"Любопытство: {self.future.curiosity(stimuli[0]["content"] if stimuli else 0)}\n"
         )
+
+        thought = self.thought_gen.generate_thought(state_summary)  # Промпт с summary
 
         event = {
             "type": "experience",
@@ -107,28 +89,15 @@ class Agent:
             "valence": round(self.state.valence, 3),
             "existence_threat": round(self.state.existence_threat, 3),
             "prediction_error": round(avg_prediction_error, 3),
-            "curiosity": round(avg_curiosity, 3),
             "thought": thought,
         }
 
         self.memory.store(event)
         self.vector_memory.add_event(event)
 
-        meta_ref = self.meta.reflect(self.memory)
-        if meta_ref:
-            self.memory.store(meta_ref)
-            self.self_model.reflect(self.state, self.memory, new_lesson=meta_ref.get("lesson"))
-
-        self.self_model.reflect(self.state, self.memory)
-
-        for s in stimuli:
-            self.future.update(s["content"], self.state.valence, self.state.arousal)
-
-        self.emotion.decay(self.state)
-        self.state.timestamp = time()
-
         self.last_thought = thought
         return thought
+
 
     def respond(self, user_text: str) -> str:
         if self.last_thought is None:
