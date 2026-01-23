@@ -4,7 +4,7 @@ from memory_classes import VectorMemory, EpisodicMemory, MetaReflection
 from model_classes import SelfModel, OtherModel
 from generators import ThoughtGenerator, ResponseGenerator
 from agent_memory import PersistentMemory
-from planning import Planner  # Импорт Planner
+from planning import Planner
 from utils import load_model_and_tokenizer
 from inputimeout import inputimeout, TimeoutOccurred
 from typing import List, Dict, Optional
@@ -28,7 +28,7 @@ class Agent:
         self.self_model = SelfModel()
         self.other_model = OtherModel()
         self.future = FutureExpectationSystem()
-        self.planner = Planner(self.self_model, self.future)  # Planner инициализирован
+        self.planner = Planner(self.self_model, self.future)
         self.last_thought: Optional[str] = None
         self.dialog_history: List[Dict[str, str]] = []
         self.current_curiosity: float = 0.0
@@ -140,6 +140,19 @@ class Agent:
 
             current_action = self.planner.get_current_action() or ""
 
+            content_for_curiosity = user_text
+            curiosity_value = self.future.curiosity(content_for_curiosity)
+
+            current_goal_desc = self.planner.goals[0].description if self.planner.goals else 'нет'
+
+            state_summary = (
+                f"Фокус: {self.state.focus or 'нет фокуса'}\n"
+                f"Состояние: arousal={self.state.arousal:.2f}, valence={self.state.valence:.2f}, threat={self.state.existence_threat:.2f}\n"
+                f"Текущая цель: {current_goal_desc}\n"
+                f"Текущее действие: {current_action}\n"
+                f"Любопытство: {curiosity_value:.2f}\n"
+            )
+
             response = self.response_gen.generate(state_summary, user_text, current_action)
             
             self.dialog_history.append({"role": "user", "content": user_text})
@@ -177,7 +190,22 @@ class Agent:
 
             thought = self.step(stimuli)
 
-            initiative_response = self.respond("Что ты думаешь дальше?")
+            current_action = self.planner.get_current_action() or ""
+
+            content_for_curiosity = "Внутренняя инициатива"
+            curiosity_value = self.future.curiosity(content_for_curiosity)
+
+            current_goal_desc = self.planner.goals[0].description if self.planner.goals else 'нет'
+
+            state_summary = (
+                f"Фокус: {self.state.focus or 'нет фокуса'}\n"
+                f"Состояние: arousal={self.state.arousal:.2f}, valence={self.state.valence:.2f}, threat={self.state.existence_threat:.2f}\n"
+                f"Текущая цель: {current_goal_desc}\n"
+                f"Текущее действие: {current_action}\n"
+                f"Любопытство: {curiosity_value:.2f}\n"
+            )
+
+            initiative_response = self.response_gen.generate(state_summary, "Что ты думаешь дальше?", current_action)
 
             return {
                 "thought": thought,
