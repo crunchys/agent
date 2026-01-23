@@ -4,7 +4,7 @@ from memory_classes import VectorMemory, EpisodicMemory, MetaReflection
 from model_classes import SelfModel, OtherModel
 from generators import ThoughtGenerator, ResponseGenerator
 from agent_memory import PersistentMemory
-from planning import Planner  # Добавлен импорт
+from planning import Planner  # Импорт Planner
 from utils import load_model_and_tokenizer
 from inputimeout import inputimeout, TimeoutOccurred
 from typing import List, Dict, Optional
@@ -28,7 +28,7 @@ class Agent:
         self.self_model = SelfModel()
         self.other_model = OtherModel()
         self.future = FutureExpectationSystem()
-        self.planner = Planner(self.self_model, self.future)  # Теперь Planner импортирован
+        self.planner = Planner(self.self_model, self.future)  # Planner инициализирован
         self.last_thought: Optional[str] = None
         self.dialog_history: List[Dict[str, str]] = []
         self.current_curiosity: float = 0.0
@@ -82,7 +82,6 @@ class Agent:
 
             current_action = self.planner.get_current_action() or "нет"
 
-            # Безопасно: если goals пустой — 'нет'
             current_goal_desc = self.planner.goals[0].description if self.planner.goals else 'нет'
 
             state_summary = (
