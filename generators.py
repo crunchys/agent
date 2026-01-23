@@ -24,9 +24,15 @@ class ThoughtGenerator:
         )
 
     def describe_affect(self, arousal: float, valence: float, existence_threat: float) -> str:
+        # Безопасная обработка: если existence_threat не число — используем 0.0
+        try:
+            threat_value = float(existence_threat)
+        except (TypeError, ValueError):
+            threat_value = 0.0
+
         arousal_desc = "спокойно" if arousal < 0.2 else "настороженно" if arousal < 0.5 else "активно" if arousal < 0.8 else "взволнованно"
         valence_desc = "печально" if valence < -0.5 else "тревожно" if valence < 0.0 else "нейтрально" if valence < 0.5 else "радостно"
-        threat_desc = f", с ощущением угрозы ({existence_threat:.2f})" if existence_threat > 0.3 else ""
+        threat_desc = f", с ощущением угрозы ({threat_value:.2f})" if threat_value > 0.3 else ""
         return f"{arousal_desc}, {valence_desc}{threat_desc}"
 
     def generate_thought(self, focus, arousal, valence, prediction_error, last_events, self_model, curiosity, vector_memory, dialog_history, existence_threat, self_evaluation: str, contrast_signal=None):
