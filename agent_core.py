@@ -62,8 +62,20 @@ class Agent:
                 for ground_event in grounded_results:
                     if ground_event["knowledge_gap"] > 0.7:
                         self.memory.store(ground_event)
-            # ===== КОНЕЦ НОВОГО =====
-            
+
+                    # Если агент пытается нарушить self-fact - наказываем через valence
+                    if ground_event.get("self_fact_violation", False):
+                        print(f"[GROUNDING] ⚠️ Обнаружена попытка нарушить self-fact!")
+                        self.state.valence -= 0.3  # Дискомфорт от лжи о себе
+                        self.state.arousal += 0.2  # Тревога
+                        # Сохраняем в память как урок
+                        self.memory.store({
+                            "type": "self_fact_violation",
+                            "time": time(),
+                            "stimulus": ground_event["stimulus"],
+                            "lesson": "Пытался солгать о своей природе - это неправильно"
+                        })
+                            
             prediction_errors = []
             curiosity = 0.0
 
