@@ -58,7 +58,8 @@ class Planner:
         goal.progress = min(1.0, max(0.0, goal.progress + delta))
         if goal.progress >= 1.0:
             goal.status = "completed"
-        elif goal.progress <= 0:
+        elif goal.progress <= 0 and goal.created_at < (time() - 30):  # ИЗМЕНЕНО
+            # Цель фейлится только если прошло 30+ секунд И progress = 0
             goal.status = "failed"
 
     def get_current_action(self) -> Optional[str]:
