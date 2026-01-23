@@ -10,6 +10,7 @@ class SelfModel:
     lessons: List[str] = None
     motivations: List[str] = None
     self_evaluations: List[str] = None
+    role_identity: str = ""
 
     def __post_init__(self):
         if self.traits is None:
@@ -22,6 +23,8 @@ class SelfModel:
             self.motivations = ['избегать неудач', 'искать знания', 'поддерживать существование']
         if self.self_evaluations is None:
             self.self_evaluations = []
+        if not self.role_identity:
+            self.role_identity = "Я - автономный агент с внутренним состоянием, способный на рефлексию"
 
     def reflect(self, state, memory, new_lesson: Optional[str] = None):
         # Фильтруем только события типа "experience", чтобы избежать KeyError
