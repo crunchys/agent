@@ -140,11 +140,7 @@ class Agent:
 
             current_action = self.planner.get_current_action() or ""
 
-            response = self.response_gen.generate(
-                self.last_thought, user_text, self.self_model, self.dialog_history,
-                self.state.valence, self.state.arousal, self.state.existence_threat,
-                self.other_model, self.current_curiosity, current_action
-            )
+            response = self.response_gen.generate(state_summary, user_text, current_action)
             
             self.dialog_history.append({"role": "user", "content": user_text})
             self.dialog_history.append({"role": "assistant", "content": response})
