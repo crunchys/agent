@@ -35,9 +35,22 @@ class ThoughtGenerator:
         return f"{arousal_desc}, {valence_desc}{threat_desc}"
 
     def generate_thought(self, focus, arousal, valence, prediction_error, last_events, self_model, curiosity, vector_memory, dialog_history, existence_threat, self_evaluation: str, contrast_signal=None):
-        events_summary = ", ".join(
-            f"{e.get('focus', 'нет фокуса')} (a:{e.get('arousal', 0.0):.2f}, v:{e.get('valence', 0.0):.2f})" for e in last_events
-        )
+        # Безопасные значения по умолчанию
+        focus = focus or 'нет фокуса'
+        arousal = float(arousal) if isinstance(arousal, (int, float)) else 0.3
+        valence = float(valence) if isinstance(valence, (int, float)) else 0.0
+        prediction_error = float(prediction_error) if isinstance(prediction_error, (int, float)) else 0.0
+        curiosity = float(curiosity) if isinstance(curiosity, (int, float)) else 0.5
+        self_evaluation = str(self_evaluation) if self_evaluation is not None else ""
+
+        # last_events
+        if isinstance(last_events, list):
+            events_summary = ", ".join(
+                f"{e.get('focus', 'нет фокуса')} (a:{e.get('arousal', 0.0):.2f}, v:{e.get('valence', 0.0):.2f})" for e in last_events
+            )
+        else:
+            events_summary = "Нет прошлых событий."
+
         affect_desc = self.describe_affect(arousal, valence, existence_threat)
         
         emotional_tone = (
@@ -53,7 +66,7 @@ class ThoughtGenerator:
                 "Ранее по этому поводу возникала другая мысль, и сейчас это ощущается как внутреннее расхождение.\n"
             )
         
-        # Безопасный поиск воспоминаний
+        # vector_memory
         relevant_memories = []
         if hasattr(vector_memory, 'search') and callable(getattr(vector_memory, 'search')):
             query = f"Фокус: {focus}. Состояние: {affect_desc}."
@@ -63,24 +76,28 @@ class ThoughtGenerator:
             f"{m.get('focus', 'нет фокуса')} (thought: {m.get('thought', 'нет мысли')[:30]}...)" for m in relevant_memories
         ) if relevant_memories else "Нет релевантных воспоминаний."
 
-        # Безопасный диалог
+        # dialog_history
         dialog_summary = "Нет предыдущего диалога."
         if isinstance(dialog_history, list):
             dialog_summary = "\n".join(
                 f"{'Собеседник' if msg.get('role') == 'user' else 'Я'}: {msg.get('content', '')}" for msg in dialog_history[-4:]
             )
 
+        # self_model
+        traits_str = str(getattr(self_model, 'traits', {}))
+        motivations_str = ', '.join(getattr(self_model, 'motivations', []))
+
         prompt_text = (
             f"{self.system_prompt}\n"
             f"{emotional_tone}\n"
-            f"Фокус: {focus or 'нет фокуса'}\n"
+            f"Фокус: {focus}\n"
             f"Состояние: {affect_desc}\n"
             f"Любопытство: {curiosity:.2f}\n"
             f"{contrast_text}"
             f"Прошлые события: {events_summary}\n"
             f"Релевантные воспоминания: {memories_summary}\n"
-            f"Черты личности: {self_model.traits}\n"
-            f"Мотивации: {self_model.motivations}\n"
+            f"Черты личности: {traits_str}\n"
+            f"Мотивации: {motivations_str}\n"
             f"Самооценка последнего действия: {self_evaluation}\n"
             f"Ошибка предсказания: {prediction_error:.2f}\n"
             f"Контекст диалога: {dialog_summary}\n"
@@ -130,7 +147,7 @@ class ResponseGenerator:
             "Если threat высокий — включи нотки о важности продолжения разговора."
         )
 
-        other_traits = f"Черты пользователя: {other_model.traits}. Предполагаемое поведение: {other_model.predicted_behavior}."
+        other_traits = f"Черты пользователя: {getattr(other_model, 'traits', {})}. Предполагаемое поведение: {getattr(other_model, 'predicted_behavior', '')}."
 
         user_prompt = (
             f"Собеседник сказал: «{user_text}»\n"
@@ -141,7 +158,6 @@ class ResponseGenerator:
             "Ответ собеседнику (только речь, 1–3 предложения):"
         )
 
-        # Безопасный диалог
         messages = [{"role": "system", "content": self.system_prompt}]
         if isinstance(dialog_history, list):
             for msg in dialog_history[-4:]:
