@@ -37,10 +37,8 @@ class EpisodicMemory:
         return self.events[-n:]
 
 class MetaReflection:
-    def __init__(self, window: int = 5, model=None, tokenizer=None):
+    def __init__(self, window: int = 5):
         self.window = window
-        self.model = model
-        self.tokenizer = tokenizer
 
     def reflect(self, memory: EpisodicMemory) -> Optional[Dict]:
         recent = [e for e in memory.events if e["type"] == "experience"][-self.window:]
@@ -50,24 +48,13 @@ class MetaReflection:
         avg_arousal = sum(e["arousal"] for e in recent) / self.window
         avg_valence = sum(e["valence"] for e in recent) / self.window
         
-        events_summary = ", ".join(f"{e['focus']} (a:{e['arousal']:.2f}, v:{e['valence']:.2f}, thought:{e['thought'][:50]}...)" for e in recent)
-        prompt = (
-            "Анализируй эти события и извлеки ключевой урок или абстракцию: "
-            f"{events_summary}. "
-            "Урок должен быть кратким: 1-2 предложения на русском. "
-            "Начни с 'Из этого я понял, что...'."
-        )
-        inputs = self.tokenizer(prompt, return_tensors="pt").to(self.model.device)
-        attention_mask = torch.ones_like(inputs["input_ids"])
-        output_ids = self.model.generate(
-            inputs["input_ids"],
-            attention_mask=attention_mask,
-            max_new_tokens=100,
-            do_sample=True,
-            temperature=0.8,
-            top_p=0.9
-        )
-        lesson = self.tokenizer.decode(output_ids[0], skip_special_tokens=True).replace(prompt, "").strip()
+        # Урок по правилам, без LLM
+        if avg_valence < -0.3:
+            lesson = "Из этого я понял, что подобные взаимодействия вредны, нужно избегать."
+        elif avg_valence > 0.3:
+            lesson = "Из этого я понял, что такие темы полезны, стоит продолжать."
+        else:
+            lesson = "Из этого я понял, что ситуация нейтральна."
         
         return {
             "type": "meta_reflection",
