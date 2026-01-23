@@ -37,7 +37,7 @@ class Agent:
 
     def step(self, stimuli: List[Dict]):
         try:
-            # ===== НОВОЕ: GROUNDING =====
+            # ===== GROUNDING =====
             if stimuli:
                 grounded_results = self.tool_manager.ground(stimuli)
                 
@@ -139,7 +139,7 @@ class Agent:
                 f"Любопытство: {curiosity_value:.2f}\n"
             )
 
-            thought = self.thought_gen.generate_thought(state_summary)
+            thought = self.thought_gen.generate_thought(state_summary, self.self_model.role_identity)
 
             event = {
                 "type": "experience",
@@ -200,7 +200,7 @@ class Agent:
                 f"Любопытство: {curiosity_value:.2f}\n"
             )
 
-            response = self.response_gen.generate(state_summary, user_text, current_action)
+            response = self.response_gen.generate(state_summary, user_text, self.self_model.role_identity, current_action)
             
             self.dialog_history.append({"role": "user", "content": user_text})
             self.dialog_history.append({"role": "assistant", "content": response})
