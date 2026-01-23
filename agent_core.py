@@ -132,11 +132,12 @@ class Agent:
             current_goal_desc = self.planner.goals[0].description if self.planner.goals else 'нет'
 
             state_summary = (
-                f"Фокус: {self.state.focus or 'нет фокуса'}\n"
-                f"Состояние: arousal={self.state.arousal:.2f}, valence={self.state.valence:.2f}, threat={self.state.existence_threat:.2f}\n"
-                f"Текущая цель: {current_goal_desc}\n"
-                f"Текущее действие: {current_action}\n"
+                f"Последний стимул: {self.state.focus or 'нет фокуса'}\n"  # ИЗМЕНЕНО: яснее
+                f"Эмоции: arousal={self.state.arousal:.2f}, valence={self.state.valence:.2f}, threat={self.state.existence_threat:.2f}\n"
+                f"Цель: {current_goal_desc}\n"
+                f"Действие: {current_action}\n"
                 f"Любопытство: {curiosity_value:.2f}\n"
+                f"Язык общения: русский\n"  # НОВОЕ: явное указание языка
             )
 
             thought = self.thought_gen.generate_thought(state_summary, self.self_model.role_identity)
@@ -193,11 +194,12 @@ class Agent:
             current_goal_desc = self.planner.goals[0].description if self.planner.goals else 'нет'
 
             state_summary = (
-                f"Фокус: {self.state.focus or 'нет фокуса'}\n"
-                f"Состояние: arousal={self.state.arousal:.2f}, valence={self.state.valence:.2f}, threat={self.state.existence_threat:.2f}\n"
-                f"Текущая цель: {current_goal_desc}\n"
-                f"Текущее действие: {current_action}\n"
+                f"Последний стимул: {self.state.focus or 'нет фокуса'}\n"  # ИЗМЕНЕНО: яснее
+                f"Эмоции: arousal={self.state.arousal:.2f}, valence={self.state.valence:.2f}, threat={self.state.existence_threat:.2f}\n"
+                f"Цель: {current_goal_desc}\n"
+                f"Действие: {current_action}\n"
                 f"Любопытство: {curiosity_value:.2f}\n"
+                f"Язык общения: русский\n"  # НОВОЕ: явное указание языка
             )
 
             response = self.response_gen.generate(state_summary, user_text, self.self_model.role_identity, current_action)
