@@ -5,6 +5,7 @@ from model_classes import SelfModel, OtherModel
 from generators import ThoughtGenerator, ResponseGenerator
 from agent_memory import PersistentMemory
 from planning import Planner
+from tool_manager import ToolManager  # НОВОЕ
 from utils import load_model_and_tokenizer
 from inputimeout import inputimeout, TimeoutOccurred
 from typing import List, Dict, Optional
@@ -29,20 +30,54 @@ class Agent:
         self.other_model = OtherModel()
         self.future = FutureExpectationSystem()
         self.planner = Planner(self.self_model, self.future)
+        self.tool_manager = ToolManager(self.vector_memory, self.memory)  # НОВОЕ
         self.last_thought: Optional[str] = None
         self.dialog_history: List[Dict[str, str]] = []
         self.current_curiosity: float = 0.0
 
     def step(self, stimuli: List[Dict]):
         try:
+            # ===== НОВОЕ: GROUNDING =====
+            if stimuli:
+                grounded_results = self.tool_manager.ground(stimuli)
+                
+                # Обновляем stimuli на основе grounding
+                for i, stimulus in enumerate(stimuli):
+                    if i < len(grounded_results):
+                        ground_info = grounded_results[i]
+                        
+                        # Повышаем prediction_error если есть knowledge_gap
+                        if ground_info["knowledge_gap"] > 0.5:
+                            stimulus["prediction_error_boost"] = ground_info["knowledge_gap"] * 0.3
+                        else:
+                            stimulus["prediction_error_boost"] = 0.0
+                        
+                        # Понижаем curiosity если факт уже известен
+                        if ground_info["fact_verified"]:
+                            stimulus["curiosity_penalty"] = 0.2
+                        else:
+                            stimulus["curiosity_penalty"] = 0.0
+                
+                # Сохраняем важные grounding результаты в память
+                for ground_event in grounded_results:
+                    if ground_event["knowledge_gap"] > 0.7:
+                        self.memory.store(ground_event)
+            # ===== КОНЕЦ НОВОГО =====
+            
             prediction_errors = []
             curiosity = 0.0
 
             for s in stimuli:
                 pe = self.prediction.compute(s)
+                # НОВОЕ: Применяем boost от grounding
+                pe += s.get("prediction_error_boost", 0.0)
                 s["prediction_error"] = pe
                 prediction_errors.append(pe)
-                s["curiosity"] = self.future.curiosity(s["content"])
+                
+                # НОВОЕ: Curiosity с учётом grounding
+                base_curiosity = self.future.curiosity(s["content"])
+                curiosity_value = base_curiosity - s.get("curiosity_penalty", 0.0)
+                s["curiosity"] = max(0.0, curiosity_value)
                 curiosity += s["curiosity"]
 
             avg_prediction_error = sum(prediction_errors) / len(prediction_errors) if prediction_errors else 0.0
