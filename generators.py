@@ -24,10 +24,10 @@ class ThoughtGenerator:
         )
 
     def describe_affect(self, arousal: float, valence: float, existence_threat: float) -> str:
-        # Безопасная обработка: если existence_threat не число — используем 0.0
+        # Безопасно для любого типа existence_threat
         try:
             threat_value = float(existence_threat)
-        except (TypeError, ValueError):
+        except:
             threat_value = 0.0
 
         arousal_desc = "спокойно" if arousal < 0.2 else "настороженно" if arousal < 0.5 else "активно" if arousal < 0.8 else "взволнованно"
@@ -54,8 +54,13 @@ class ThoughtGenerator:
                 "Ранее по этому поводу возникала другая мысль, и сейчас это ощущается как внутреннее расхождение.\n"
             )
         
-        query = f"Фокус: {focus}. Состояние: {affect_desc}."
-        relevant_memories = vector_memory.search(query, k=3)
+        # Безопасный поиск воспоминаний
+        if hasattr(vector_memory, 'search') and callable(getattr(vector_memory, 'search')):
+            query = f"Фокус: {focus}. Состояние: {affect_desc}."
+            relevant_memories = vector_memory.search(query, k=3)
+        else:
+            relevant_memories = []
+
         memories_summary = ", ".join(
             f"{m.get('focus', 'нет фокуса')} (thought: {m.get('thought', 'нет мысли')[:30]}...)" for m in relevant_memories
         ) if relevant_memories else "Нет релевантных воспоминаний."
