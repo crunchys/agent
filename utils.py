@@ -11,9 +11,22 @@ def load_model_and_tokenizer(model_name="Qwen/Qwen2.5-3B-Instruct", hf_token=Non
         if torch.cuda.is_available():
             print(f"GPU: {torch.cuda.get_device_name(0)}")
             print(f"CUDA версия: {torch.version.cuda}")
-            print(f"Память GPU: {torch.cuda.get_device_properties(0).total_memory / 1024**3:.2f} GB")
+            
+            # Очистка кэша GPU перед загрузкой
+            torch.cuda.empty_cache()
+            
+            mem_total = torch.cuda.get_device_properties(0).total_memory / 1024**3
+            mem_reserved = torch.cuda.memory_reserved(0) / 1024**3
+            mem_allocated = torch.cuda.memory_allocated(0) / 1024**3
+            
+            print(f"Память GPU (всего): {mem_total:.2f} GB")
+            print(f"Память GPU (зарезервировано): {mem_reserved:.2f} GB")
+            print(f"Память GPU (использовано): {mem_allocated:.2f} GB")
+            print(f"Память GPU (свободно): {mem_total - mem_allocated:.2f} GB")
+            
             device = "cuda"
-            dtype = torch.bfloat16 if torch.cuda.is_bf16_supported() else torch.float16
+            # Используем float16 вместо bfloat16 для совместимости
+            dtype = torch.float16
         else:
             print("⚠️ CUDA недоступна, используется CPU")
             device = "cpu"
@@ -23,68 +36,43 @@ def load_model_and_tokenizer(model_name="Qwen/Qwen2.5-3B-Instruct", hf_token=Non
         print(f"Тип данных: {dtype}")
         print("=" * 50)
 
+        print("Загрузка токенизатора...")
         tokenizer = AutoTokenizer.from_pretrained(
             model_name,
             trust_remote_code=True,
-            padding_side="left"
+            padding_side="left",
+            token=hf_token
         )
 
         if tokenizer.pad_token is None:
             tokenizer.pad_token = tokenizer.eos_token
-
-        print(f"Загрузка модели {model_name}...")
         
-        # Попытка с квантизацией (только для GPU)
-        if device == "cuda":
-            try:
-                from transformers import BitsAndBytesConfig
-                
-                quantization_config = BitsAndBytesConfig(
-                    load_in_4bit=True,
-                    bnb_4bit_quant_type="nf4",
-                    bnb_4bit_compute_dtype=torch.float16,
-                    bnb_4bit_use_double_quant=True
-                )
-
-                model = AutoModelForCausalLM.from_pretrained(
-                    model_name,
-                    torch_dtype=dtype,
-                    device_map="auto",
-                    trust_remote_code=True,
-                    low_cpu_mem_usage=True,
-                    quantization_config=quantization_config
-                )
-                print("✓ Модель загружена с 4-bit квантизацией")
-                
-            except Exception as e:
-                print(f"⚠️ Ошибка квантизации: {e}")
-                print("Загрузка без квантизации...")
-                
-                model = AutoModelForCausalLM.from_pretrained(
-                    model_name,
-                    torch_dtype=dtype,
-                    device_map="auto",
-                    trust_remote_code=True,
-                    low_cpu_mem_usage=True
-                )
-                print("✓ Модель загружена без квантизации")
-        else:
-            # CPU без квантизации
-            model = AutoModelForCausalLM.from_pretrained(
-                model_name,
-                torch_dtype=dtype,
-                trust_remote_code=True,
-                low_cpu_mem_usage=True
-            )
-            print("✓ Модель загружена на CPU")
+        print(f"✓ Токенизатор загружен")
+        print(f"Загрузка модели {model_name}...")
+        print("(это может занять 1-2 минуты при первой загрузке)")
+        
+        # Используем dtype вместо torch_dtype
+        model = AutoModelForCausalLM.from_pretrained(
+            model_name,
+            dtype=dtype,  # Исправлено: было torch_dtype
+            device_map="auto" if device == "cuda" else None,
+            trust_remote_code=True,
+            low_cpu_mem_usage=True,
+            token=hf_token
+        )
 
         model.eval()
         
-        # Проверка, где модель находится
-        if hasattr(model, 'device'):
-            print(f"Модель на устройстве: {model.device}")
+        # Проверка устройства
+        actual_device = next(model.parameters()).device
+        print(f"✓ Модель загружена на: {actual_device}")
+        
+        if torch.cuda.is_available():
+            mem_allocated_after = torch.cuda.memory_allocated(0) / 1024**3
+            print(f"✓ Использовано памяти GPU: {mem_allocated_after:.2f} GB")
         
         print("=" * 50)
+        
         return model, tokenizer
         
     except Exception as e:
