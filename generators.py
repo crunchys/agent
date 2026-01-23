@@ -24,7 +24,6 @@ class ThoughtGenerator:
         )
 
     def describe_affect(self, arousal: float, valence: float, existence_threat: float) -> str:
-        # Безопасно для любого типа existence_threat
         try:
             threat_value = float(existence_threat)
         except:
@@ -55,19 +54,21 @@ class ThoughtGenerator:
             )
         
         # Безопасный поиск воспоминаний
+        relevant_memories = []
         if hasattr(vector_memory, 'search') and callable(getattr(vector_memory, 'search')):
             query = f"Фокус: {focus}. Состояние: {affect_desc}."
             relevant_memories = vector_memory.search(query, k=3)
-        else:
-            relevant_memories = []
 
         memories_summary = ", ".join(
             f"{m.get('focus', 'нет фокуса')} (thought: {m.get('thought', 'нет мысли')[:30]}...)" for m in relevant_memories
         ) if relevant_memories else "Нет релевантных воспоминаний."
 
-        dialog_summary = "\n".join(
-            f"{'Собеседник' if msg['role'] == 'user' else 'Я'}: {msg['content']}" for msg in dialog_history[-4:]
-        ) if dialog_history else "Нет предыдущего диалога."
+        # Безопасный диалог
+        dialog_summary = "Нет предыдущего диалога."
+        if isinstance(dialog_history, list):
+            dialog_summary = "\n".join(
+                f"{'Собеседник' if msg.get('role') == 'user' else 'Я'}: {msg.get('content', '')}" for msg in dialog_history[-4:]
+            )
 
         prompt_text = (
             f"{self.system_prompt}\n"
@@ -140,9 +141,11 @@ class ResponseGenerator:
             "Ответ собеседнику (только речь, 1–3 предложения):"
         )
 
+        # Безопасный диалог
         messages = [{"role": "system", "content": self.system_prompt}]
-        for msg in dialog_history[-4:]:
-            messages.append(msg)
+        if isinstance(dialog_history, list):
+            for msg in dialog_history[-4:]:
+                messages.append(msg)
         messages.append({"role": "user", "content": user_prompt})
 
         inputs = self.tokenizer.apply_chat_template(
