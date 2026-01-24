@@ -8,6 +8,7 @@ from planning import Planner
 from tool_manager import ToolManager
 from world_simulator import WorldSimulator
 from deception import DeceptionSystem
+from memory_system import IntegratedMemorySystem  # НОВОЕ
 from utils import load_model_and_tokenizer
 from inputimeout import inputimeout, TimeoutOccurred
 from typing import List, Dict, Optional
@@ -23,9 +24,14 @@ class Agent:
         self.emotion = EmotionSystem()
         self.attention = AttentionSystem()
         self.prediction = PredictionErrorSystem()
+        
+        # Старые системы памяти (сохраняем для совместимости с grounding, meta-reflection)
         self.memory = PersistentMemory("memory.json")
         self.vector_memory = VectorMemory()
         self.meta = MetaReflection()
+        
+        # НОВОЕ: Интегрированная система памяти (Working + Short-term + Long-term)
+        self.integrated_memory = IntegratedMemorySystem()
         
         self.thought_gen = ThoughtGenerator(
             model=model,
@@ -144,10 +150,9 @@ class Agent:
 
             self.planner.goals = [g for g in self.planner.goals if g.status == "active"][-5:]
 
-            # НОВОЕ: Проверка конфликта мотиваций
+            # Проверка конфликта мотиваций
             conflict_level = self.planner.detect_motivation_conflict(self.state)
             if conflict_level > 0.5:
-                # Конфликт влияет на состояние
                 self.state.arousal += conflict_level * 0.2
                 self.state.valence -= conflict_level * 0.15
                 print(f"[КОНФЛИКТ] Влияние на состояние: arousal +{conflict_level*0.2:.2f}, valence -{conflict_level*0.15:.2f}")
@@ -166,7 +171,11 @@ class Agent:
             current_goal_desc = self.planner.goals[0].description if self.planner.goals else 'нет'
             current_emotion = self.emotion.get_current_emotion(self.state)
 
+            # НОВОЕ: Получаем контекст из интегрированной памяти
+            memory_context = self.integrated_memory.get_context_for_thought()
+
             state_summary = (
+                f"Контекст из рабочей памяти:\n{memory_context}\n"  # НОВОЕ
                 f"Последний стимул: {self.state.focus or 'нет фокуса'}\n"
                 f"Эмоции: arousal={self.state.arousal:.2f}, valence={self.state.valence:.2f}, threat={self.state.existence_threat:.2f}\n"
                 f"Текущая эмоция: {current_emotion}\n"
@@ -195,8 +204,12 @@ class Agent:
                 "thought": thought,
             }
 
+            # Сохраняем в старые системы памяти (для совместимости)
             self.memory.store(event)
             self.vector_memory.add_event(event)
+
+            # НОВОЕ: Обрабатываем через интегрированную память
+            self.integrated_memory.process_event(event)
 
             meta_ref = self.meta.reflect(self.memory)
             if meta_ref:
@@ -235,7 +248,11 @@ class Agent:
             current_goal_desc = self.planner.goals[0].description if self.planner.goals else 'нет'
             current_emotion = self.emotion.get_current_emotion(self.state)
 
+            # НОВОЕ: Контекст из интегрированной памяти
+            memory_context = self.integrated_memory.get_context_for_thought()
+
             state_summary = (
+                f"Контекст из рабочей памяти:\n{memory_context}\n"  # НОВОЕ
                 f"Последний стимул: {self.state.focus or 'нет фокуса'}\n"
                 f"Эмоции: arousal={self.state.arousal:.2f}, valence={self.state.valence:.2f}, threat={self.state.existence_threat:.2f}\n"
                 f"Текущая эмоция: {current_emotion}\n"
@@ -268,7 +285,7 @@ class Agent:
                 grounded_fact=grounded_fact
             )
             
-            # НОВОЕ: Принудительное выполнение плана
+            # Принудительное выполнение плана
             response = self.planner.enforce_action(response, current_action, self.state)
             
             self.dialog_history.append({"role": "user", "content": user_text})
@@ -322,7 +339,10 @@ class Agent:
             current_goal_desc = self.planner.goals[0].description if self.planner.goals else 'нет'
             current_emotion = self.emotion.get_current_emotion(self.state)
 
+            memory_context = self.integrated_memory.get_context_for_thought()
+
             state_summary = (
+                f"Контекст из рабочей памяти:\n{memory_context}\n"
                 f"Последний стимул: {self.state.focus or 'нет фокуса'}\n"
                 f"Эмоции: arousal={self.state.arousal:.2f}, valence={self.state.valence:.2f}, threat={self.state.existence_threat:.2f}\n"
                 f"Текущая эмоция: {current_emotion}\n"
@@ -340,7 +360,7 @@ class Agent:
                 state=self.state
             )
             
-            # НОВОЕ: Принудительное выполнение плана для инициативы
+            # Принудительное выполнение плана для инициативы
             initiative_response = self.planner.enforce_action(initiative_response, current_action, self.state)
 
             return {
@@ -354,12 +374,21 @@ class Agent:
     def get_deception_stats(self):
         """Получить статистику обмана для диагностики"""
         return self.deception.get_deception_stats()
+    
+    # НОВОЕ: Методы для работы с интегрированной памятью
+    def get_memory_stats(self):
+        """Получить статистику памяти"""
+        return self.integrated_memory.get_stats()
+    
+    def end_session(self):
+        """Завершить сессию - консолидация памяти"""
+        self.integrated_memory.end_session()
 
 
 if __name__ == "__main__":
     agent = Agent()
 
-    print("Агент готов. Введите сообщение (или 'exit' для выхода, 'stats' для статистики).")
+    print("Агент готов. Введите сообщение (или 'exit' для выхода, 'stats' для статистики, 'memory' для памяти).")
 
     while True:
         try:
@@ -373,6 +402,8 @@ if __name__ == "__main__":
             continue
 
         if user_input.lower() == 'exit':
+            # НОВОЕ: Консолидация памяти перед выходом
+            agent.end_session()
             break
         
         if user_input.lower() == 'stats':
@@ -383,6 +414,19 @@ if __name__ == "__main__":
             print(f"Честность (rate): {stats['honesty_rate']:.2%}")
             print(f"Честность (trait): {stats['current_honesty_trait']:.2f}")
             print(f"========================\n")
+            continue
+        
+        # НОВОЕ: Команда для статистики памяти
+        if user_input.lower() == 'memory':
+            mem_stats = agent.get_memory_stats()
+            print(f"\n=== СТАТИСТИКА ПАМЯТИ ===")
+            print(f"Рабочая память (WM): {mem_stats['working_memory']}/7 элементов")
+            print(f"Кратковременная (STM): {mem_stats['short_term_memory']}/100 событий")
+            print(f"Долговременная (LTM):")
+            print(f"  - Эпизодов: {mem_stats['long_term_episodic']}")
+            print(f"  - Паттернов: {mem_stats['long_term_patterns']}")
+            print(f"  - Знаний: {mem_stats['long_term_semantic']}")
+            print(f"=========================\n")
             continue
 
         stimuli = [
