@@ -14,7 +14,11 @@ class SelfModel:
 
     def __post_init__(self):
         if self.traits is None:
-            self.traits = {'смелость': 0.5, 'любопытство': 0.5}
+            self.traits = {
+                'смелость': 0.5,
+                'любопытство': 0.5,
+                'honesty': 0.7  # НОВОЕ: честность (0.0 = всегда врёт, 1.0 = всегда честен)
+            }
         if self.goals is None:
             self.goals = []
         if self.lessons is None:
@@ -36,6 +40,12 @@ class SelfModel:
             self.lessons.append(new_lesson)
             if "ошиб" in new_lesson.lower() or "неудач" in new_lesson.lower():
                 self.traits['смелость'] = max(0.0, self.traits['смелость'] - 0.1)
+            
+            # НОВОЕ: Обновление honesty на основе уроков
+            if "ложь" in new_lesson.lower() and "негатив" in new_lesson.lower():
+                self.traits['honesty'] = min(1.0, self.traits['honesty'] + 0.05)
+            elif "честн" in new_lesson.lower() and "помогл" in new_lesson.lower():
+                self.traits['honesty'] = min(1.0, self.traits['honesty'] + 0.03)
 
     def evaluate_action(self, action_desc: str, outcome_valence: float, model, tokenizer):
         """Метапознание: Оценка действия"""
