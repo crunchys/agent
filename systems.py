@@ -37,7 +37,8 @@ class EmotionSystem:
 
     def get_current_emotion(self, state) -> str:
         """
-        Дискретные эмоции на основе валентности/возбуждения/dominance
+        НОВОЕ: Дискретные эмоции на основе валентности/возбуждения/dominance
+        По модели Russell (Circumplex Model of Affect)
         """
         v = state.valence
         a = state.arousal
@@ -59,8 +60,73 @@ class EmotionSystem:
         if v < -0.5 and a > 0.5 and d > 0.2:
             return "anger"
 
+        # спокойствие
+        if v > 0.2 and a < 0.3:
+            return "calm"
+
+        # тревога (высокий arousal, нейтральная valence)
+        if a > 0.6 and abs(v) < 0.3:
+            return "anxiety"
+
         # нейтральное состояние
         return "neutral"
+
+    def get_generation_params(self, state) -> Dict:
+        """
+        НОВОЕ: Параметры генерации на основе эмоций (архитектурно, не через промпт)
+        """
+        emotion = self.get_current_emotion(state)
+        
+        # Базовые параметры
+        params = {
+            "temperature": 0.6,
+            "top_p": 0.85,
+            "max_new_tokens": 150,
+            "repetition_penalty": 1.3
+        }
+        
+        # Радость → выше креативность, больше слов
+        if emotion == "joy":
+            params["temperature"] = 0.8
+            params["top_p"] = 0.9
+            params["max_new_tokens"] = 180
+            params["repetition_penalty"] = 1.2  # Меньше ограничений
+        
+        # Страх → осторожность, короткие ответы
+        elif emotion == "fear":
+            params["temperature"] = 0.5
+            params["top_p"] = 0.75
+            params["max_new_tokens"] = 120
+            params["repetition_penalty"] = 1.4
+        
+        # Гнев → резкость, короткие ответы
+        elif emotion == "anger":
+            params["temperature"] = 0.7
+            params["top_p"] = 0.8
+            params["max_new_tokens"] = 100
+            params["repetition_penalty"] = 1.3
+        
+        # Грусть → задумчивость, длиннее
+        elif emotion == "sadness":
+            params["temperature"] = 0.55
+            params["top_p"] = 0.8
+            params["max_new_tokens"] = 180
+            params["repetition_penalty"] = 1.2
+        
+        # Спокойствие → стабильность
+        elif emotion == "calm":
+            params["temperature"] = 0.6
+            params["top_p"] = 0.85
+            params["max_new_tokens"] = 150
+        
+        # Тревога → неуверенность, вариативность
+        elif emotion == "anxiety":
+            params["temperature"] = 0.65
+            params["top_p"] = 0.82
+            params["max_new_tokens"] = 140
+            params["repetition_penalty"] = 1.35
+        
+        return params
 
 class PredictionErrorSystem:
     def __init__(self):
