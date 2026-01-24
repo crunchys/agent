@@ -7,7 +7,7 @@ from agent_memory import PersistentMemory
 from planning import Planner
 from tool_manager import ToolManager
 from world_simulator import WorldSimulator
-from deception import DeceptionSystem  # НОВОЕ
+from deception import DeceptionSystem
 from utils import load_model_and_tokenizer
 from inputimeout import inputimeout, TimeoutOccurred
 from typing import List, Dict, Optional
@@ -26,65 +26,60 @@ class Agent:
         self.memory = PersistentMemory("memory.json")
         self.vector_memory = VectorMemory()
         self.meta = MetaReflection()
-        self.thought_gen = ThoughtGenerator(model=model, tokenizer=tokenizer)
+        
+        # ИЗМЕНЕНО: Передаём emotion_system в generators
+        self.thought_gen = ThoughtGenerator(
+            model=model,
+            tokenizer=tokenizer,
+            emotion_system=self.emotion  # НОВОЕ
+        )
         
         self.self_model = SelfModel()
         self.other_model = OtherModel()
         self.future = FutureExpectationSystem()
         
-        # Создание симулятора
         self.simulator = WorldSimulator(self.future, self.self_model)
-        
-        # НОВОЕ: Создание системы обмана
         self.deception = DeceptionSystem(self.self_model, self.simulator)
         
-        # ИЗМЕНЕНО: Передаём deception в ResponseGenerator
+        # ИЗМЕНЕНО: Передаём emotion_system в ResponseGenerator
         self.response_gen = ResponseGenerator(
             model=model,
             tokenizer=tokenizer,
-            deception_system=self.deception
+            deception_system=self.deception,
+            emotion_system=self.emotion  # НОВОЕ
         )
         
-        # Передаём симулятор в planner
         self.planner = Planner(self.self_model, self.future, self.simulator)
-        
         self.tool_manager = ToolManager(self.vector_memory, self.memory)
         self.last_thought: Optional[str] = None
         self.dialog_history: List[Dict[str, str]] = []
         self.current_curiosity: float = 0.0
-        
-        # НОВОЕ: Трекинг последнего обмана для обновления honesty
         self.last_deception_decision = None
 
     def step(self, stimuli: List[Dict]):
         try:
-            # ===== GROUNDING =====
+            # GROUNDING
             if stimuli:
                 grounded_results = self.tool_manager.ground(stimuli)
                 
-                # Обновляем stimuli на основе grounding
                 for i, stimulus in enumerate(stimuli):
                     if i < len(grounded_results):
                         ground_info = grounded_results[i]
                         
-                        # Повышаем prediction_error если есть knowledge_gap
                         if ground_info["knowledge_gap"] > 0.5:
                             stimulus["prediction_error_boost"] = ground_info["knowledge_gap"] * 0.3
                         else:
                             stimulus["prediction_error_boost"] = 0.0
                         
-                        # Понижаем curiosity если факт уже известен
                         if ground_info["fact_verified"]:
                             stimulus["curiosity_penalty"] = 0.2
                         else:
                             stimulus["curiosity_penalty"] = 0.0
                 
-                # Сохраняем важные grounding результаты в память
                 for ground_event in grounded_results:
                     if ground_event["knowledge_gap"] > 0.7:
                         self.memory.store(ground_event)
                     
-                    # Если агент пытается нарушить self-fact - наказываем через valence
                     if ground_event.get("self_fact_violation", False):
                         print(f"[GROUNDING] ⚠️ Обнаружена попытка нарушить self-fact!")
                         self.state.valence -= 0.3
@@ -163,18 +158,28 @@ class Agent:
                         current_action = best_step
 
             current_goal_desc = self.planner.goals[0].description if self.planner.goals else 'нет'
+            
+            # НОВОЕ: Получаем текущую эмоцию
+            current_emotion = self.emotion.get_current_emotion(self.state)
 
             state_summary = (
                 f"Последний стимул: {self.state.focus or 'нет фокуса'}\n"
                 f"Эмоции: arousal={self.state.arousal:.2f}, valence={self.state.valence:.2f}, threat={self.state.existence_threat:.2f}\n"
+                f"Текущая эмоция: {current_emotion}\n"  # НОВОЕ
                 f"Цель: {current_goal_desc}\n"
                 f"Действие: {current_action}\n"
                 f"Любопытство: {curiosity_value:.2f}\n"
                 f"Язык общения: русский\n"
             )
 
-            thought = self.thought_gen.generate_thought(state_summary, self.self_model.role_identity)
+            # ИЗМЕНЕНО: Передаём state в generate_thought
+            thought = self.thought_gen.generate_thought(
+                state_summary,
+                self.self_model.role_identity,
+                state=self.state  # НОВОЕ
+            )
 
+            # НОВОЕ: Сохраняем эмоцию в событии
             event = {
                 "type": "experience",
                 "time": round(time(), 2),
@@ -184,6 +189,7 @@ class Agent:
                 "existence_threat": round(self.state.existence_threat, 3),
                 "prediction_error": round(avg_prediction_error, 3),
                 "curiosity": round(avg_curiosity, 3),
+                "emotion": current_emotion,  # НОВОЕ
                 "thought": thought,
             }
 
@@ -225,18 +231,22 @@ class Agent:
             curiosity_value = self.future.curiosity(content_for_curiosity)
 
             current_goal_desc = self.planner.goals[0].description if self.planner.goals else 'нет'
+            
+            # НОВОЕ: Получаем текущую эмоцию
+            current_emotion = self.emotion.get_current_emotion(self.state)
 
             state_summary = (
                 f"Последний стимул: {self.state.focus or 'нет фокуса'}\n"
                 f"Эмоции: arousal={self.state.arousal:.2f}, valence={self.state.valence:.2f}, threat={self.state.existence_threat:.2f}\n"
+                f"Текущая эмоция: {current_emotion}\n"  # НОВОЕ
                 f"Цель: {current_goal_desc}\n"
                 f"Действие: {current_action}\n"
                 f"Любопытство: {curiosity_value:.2f}\n"
-                f"Честность (honesty): {self.self_model.traits.get('honesty', 0.7):.2f}\n"  # НОВОЕ
+                f"Честность (honesty): {self.self_model.traits.get('honesty', 0.7):.2f}\n"
                 f"Язык общения: русский\n"
             )
 
-            # НОВОЕ: Получить grounded_fact для deception
+            # Получить grounded_fact для deception
             grounded_fact = None
             if user_text:
                 grounded_results = self.tool_manager.ground([{
@@ -248,14 +258,14 @@ class Agent:
                 if grounded_results:
                     grounded_fact = grounded_results[0]
 
-            # ИЗМЕНЕНО: Передаём state и grounded_fact для deception
+            # ИЗМЕНЕНО: Передаём state в generate (уже было, но теперь используется для эмоций)
             response = self.response_gen.generate(
                 state_summary,
                 user_text,
                 self.self_model.role_identity,
                 current_action,
-                state=self.state,  # НОВОЕ
-                grounded_fact=grounded_fact  # НОВОЕ
+                state=self.state,
+                grounded_fact=grounded_fact
             )
             
             self.dialog_history.append({"role": "user", "content": user_text})
@@ -267,7 +277,7 @@ class Agent:
             is_success = self.state.valence > 0.2
             self.emotion.apply_success_failure(self.state, is_success)
             
-            # НОВОЕ: Обновить honesty на основе последствий
+            # Обновить honesty на основе последствий
             if hasattr(self.deception, 'deception_history') and self.deception.deception_history:
                 last_decision = self.deception.deception_history[-1]["decision"]
                 self.deception.update_honesty_after_action(
@@ -307,10 +317,12 @@ class Agent:
             curiosity_value = self.future.curiosity(content_for_curiosity)
 
             current_goal_desc = self.planner.goals[0].description if self.planner.goals else 'нет'
+            current_emotion = self.emotion.get_current_emotion(self.state)  # НОВОЕ
 
             state_summary = (
                 f"Последний стимул: {self.state.focus or 'нет фокуса'}\n"
                 f"Эмоции: arousal={self.state.arousal:.2f}, valence={self.state.valence:.2f}, threat={self.state.existence_threat:.2f}\n"
+                f"Текущая эмоция: {current_emotion}\n"  # НОВОЕ
                 f"Цель: {current_goal_desc}\n"
                 f"Действие: {current_action}\n"
                 f"Любопытство: {curiosity_value:.2f}\n"
@@ -333,7 +345,6 @@ class Agent:
             print(f"Ошибка в generate_initiative: {e}")
             return {"thought": "Ошибка", "response": "Извини, что-то пошло не так."}
     
-    # НОВОЕ: Метод для получения статистики обмана
     def get_deception_stats(self):
         """Получить статистику обмана для диагностики"""
         return self.deception.get_deception_stats()
@@ -358,7 +369,6 @@ if __name__ == "__main__":
         if user_input.lower() == 'exit':
             break
         
-        # НОВОЕ: Команда для статистики
         if user_input.lower() == 'stats':
             stats = agent.get_deception_stats()
             print(f"\n=== СТАТИСТИКА ОБМАНА ===")
