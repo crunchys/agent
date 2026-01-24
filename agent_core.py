@@ -5,7 +5,8 @@ from model_classes import SelfModel, OtherModel
 from generators import ThoughtGenerator, ResponseGenerator
 from agent_memory import PersistentMemory
 from planning import Planner
-from tool_manager import ToolManager  # НОВОЕ
+from tool_manager import ToolManager
+from world_simulator import WorldSimulator  # НОВОЕ
 from utils import load_model_and_tokenizer
 from inputimeout import inputimeout, TimeoutOccurred
 from typing import List, Dict, Optional
@@ -29,8 +30,14 @@ class Agent:
         self.self_model = SelfModel()
         self.other_model = OtherModel()
         self.future = FutureExpectationSystem()
-        self.planner = Planner(self.self_model, self.future)
-        self.tool_manager = ToolManager(self.vector_memory, self.memory)  # НОВОЕ
+        
+        # НОВОЕ: Создание симулятора
+        self.simulator = WorldSimulator(self.future, self.self_model)
+        
+        # ИЗМЕНЕНО: Передаём симулятор в planner
+        self.planner = Planner(self.self_model, self.future, self.simulator)
+        
+        self.tool_manager = ToolManager(self.vector_memory, self.memory)
         self.last_thought: Optional[str] = None
         self.dialog_history: List[Dict[str, str]] = []
         self.current_curiosity: float = 0.0
@@ -62,7 +69,7 @@ class Agent:
                 for ground_event in grounded_results:
                     if ground_event["knowledge_gap"] > 0.7:
                         self.memory.store(ground_event)
-
+                    
                     # Если агент пытается нарушить self-fact - наказываем через valence
                     if ground_event.get("self_fact_violation", False):
                         print(f"[GROUNDING] ⚠️ Обнаружена попытка нарушить self-fact!")
@@ -75,18 +82,18 @@ class Agent:
                             "stimulus": ground_event["stimulus"],
                             "lesson": "Пытался солгать о своей природе - это неправильно"
                         })
-                            
+            
             prediction_errors = []
             curiosity = 0.0
 
             for s in stimuli:
                 pe = self.prediction.compute(s)
-                # НОВОЕ: Применяем boost от grounding
+                # Применяем boost от grounding
                 pe += s.get("prediction_error_boost", 0.0)
                 s["prediction_error"] = pe
                 prediction_errors.append(pe)
                 
-                # НОВОЕ: Curiosity с учётом grounding
+                # Curiosity с учётом grounding
                 base_curiosity = self.future.curiosity(s["content"])
                 curiosity_value = base_curiosity - s.get("curiosity_penalty", 0.0)
                 s["curiosity"] = max(0.0, curiosity_value)
@@ -110,7 +117,13 @@ class Agent:
             content_for_curiosity = stimuli[0]["content"] if stimuli else ""
             curiosity_value = self.future.curiosity(content_for_curiosity)
 
-            # Планирование
+            # НОВОЕ: Проверка нужен ли replanning через симуляцию
+            if random.random() < 0.2:  # 20% шанс проверить replanning
+                replanned = self.planner.replan_if_needed(self.state)
+                if replanned:
+                    print("[СИМУЛЯЦИЯ] План был пересмотрен")
+
+            # Планирование (без изменений в основной логике)
             if random.random() < 0.4 or not self.planner.goals:
                 new_goal = self.planner.form_goal(self.state, avg_curiosity, self.state.existence_threat, avg_prediction_error)
                 if new_goal:
@@ -127,17 +140,28 @@ class Agent:
 
             self.planner.goals = [g for g in self.planner.goals if g.status == "active"][-5:]
 
+            # ИЗМЕНЕНО: Используем симуляцию для выбора действия если есть варианты
             current_action = self.planner.get_current_action() or "нет"
+            
+            # НОВОЕ: Если есть несколько возможных действий - симулируем лучшее
+            if self.planner.goals and len(self.planner.goals) > 0:
+                top_goal = max([g for g in self.planner.goals if g.status == "active"], 
+                              key=lambda g: g.priority, default=None)
+                if top_goal and len(top_goal.steps) > 1:
+                    # Есть варианты шагов - выбираем лучший через симуляцию
+                    best_step = self.planner.choose_best_action_simulated(self.state, top_goal.steps[:3])
+                    if best_step:
+                        current_action = best_step
 
             current_goal_desc = self.planner.goals[0].description if self.planner.goals else 'нет'
 
             state_summary = (
-                f"Последний стимул: {self.state.focus or 'нет фокуса'}\n"  # ИЗМЕНЕНО: яснее
+                f"Последний стимул: {self.state.focus or 'нет фокуса'}\n"
                 f"Эмоции: arousal={self.state.arousal:.2f}, valence={self.state.valence:.2f}, threat={self.state.existence_threat:.2f}\n"
                 f"Цель: {current_goal_desc}\n"
                 f"Действие: {current_action}\n"
                 f"Любопытство: {curiosity_value:.2f}\n"
-                f"Язык общения: русский\n"  # НОВОЕ: явное указание языка
+                f"Язык общения: русский\n"
             )
 
             thought = self.thought_gen.generate_thought(state_summary, self.self_model.role_identity)
@@ -194,12 +218,12 @@ class Agent:
             current_goal_desc = self.planner.goals[0].description if self.planner.goals else 'нет'
 
             state_summary = (
-                f"Последний стимул: {self.state.focus or 'нет фокуса'}\n"  # ИЗМЕНЕНО: яснее
+                f"Последний стимул: {self.state.focus or 'нет фокуса'}\n"
                 f"Эмоции: arousal={self.state.arousal:.2f}, valence={self.state.valence:.2f}, threat={self.state.existence_threat:.2f}\n"
                 f"Цель: {current_goal_desc}\n"
                 f"Действие: {current_action}\n"
                 f"Любопытство: {curiosity_value:.2f}\n"
-                f"Язык общения: русский\n"  # НОВОЕ: явное указание языка
+                f"Язык общения: русский\n"
             )
 
             response = self.response_gen.generate(state_summary, user_text, self.self_model.role_identity, current_action)
@@ -247,14 +271,15 @@ class Agent:
             current_goal_desc = self.planner.goals[0].description if self.planner.goals else 'нет'
 
             state_summary = (
-                f"Фокус: {self.state.focus or 'нет фокуса'}\n"
-                f"Состояние: arousal={self.state.arousal:.2f}, valence={self.state.valence:.2f}, threat={self.state.existence_threat:.2f}\n"
-                f"Текущая цель: {current_goal_desc}\n"
-                f"Текущее действие: {current_action}\n"
+                f"Последний стимул: {self.state.focus or 'нет фокуса'}\n"
+                f"Эмоции: arousal={self.state.arousal:.2f}, valence={self.state.valence:.2f}, threat={self.state.existence_threat:.2f}\n"
+                f"Цель: {current_goal_desc}\n"
+                f"Действие: {current_action}\n"
                 f"Любопытство: {curiosity_value:.2f}\n"
+                f"Язык общения: русский\n"
             )
 
-            initiative_response = self.response_gen.generate(state_summary, "Что ты думаешь дальше?", current_action)
+            initiative_response = self.response_gen.generate(state_summary, "Что ты думаешь дальше?", self.self_model.role_identity, current_action)
 
             return {
                 "thought": thought,
