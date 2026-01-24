@@ -2,11 +2,12 @@ from typing import List, Dict, Optional
 import torch
 
 class ThoughtGenerator:
-    def __init__(self, model, tokenizer):
+    def __init__(self, model, tokenizer, emotion_system=None):  # НОВОЕ: emotion_system
         self.model = model
         self.tokenizer = tokenizer
+        self.emotion_system = emotion_system  # НОВОЕ
 
-    def generate_thought(self, state_summary: str, role_identity: str = "") -> str:
+    def generate_thought(self, state_summary: str, role_identity: str = "", state=None) -> str:  # НОВОЕ: state
         role_part = f"Роль: {role_identity}\n" if role_identity else ""
         prompt_text = (
             f"{role_part}"
@@ -22,14 +23,26 @@ class ThoughtGenerator:
         input_ids = inputs["input_ids"]
         attention_mask = torch.ones_like(input_ids)
 
+        # НОВОЕ: Динамические параметры от эмоций
+        if self.emotion_system and state:
+            gen_params = self.emotion_system.get_generation_params(state)
+        else:
+            # Fallback к статичным
+            gen_params = {
+                "temperature": 0.6,
+                "top_p": 0.85,
+                "max_new_tokens": 150,
+                "repetition_penalty": 1.3
+            }
+
         output_ids = self.model.generate(
             input_ids,
             attention_mask=attention_mask,
-            max_new_tokens=150,
+            max_new_tokens=gen_params["max_new_tokens"],
             do_sample=True,
-            temperature=0.6,
-            top_p=0.85,
-            repetition_penalty=1.3,
+            temperature=gen_params["temperature"],
+            top_p=gen_params["top_p"],
+            repetition_penalty=gen_params["repetition_penalty"],
             no_repeat_ngram_size=3,
             pad_token_id=self.tokenizer.eos_token_id,
             eos_token_id=self.tokenizer.eos_token_id,
@@ -43,10 +56,11 @@ class ThoughtGenerator:
 
 
 class ResponseGenerator:
-    def __init__(self, model, tokenizer, deception_system=None):  # НОВОЕ: deception_system
+    def __init__(self, model, tokenizer, deception_system=None, emotion_system=None):  # НОВОЕ: emotion_system
         self.model = model
         self.tokenizer = tokenizer
-        self.deception_system = deception_system  # НОВОЕ
+        self.deception_system = deception_system
+        self.emotion_system = emotion_system  # НОВОЕ
 
     def generate(
         self,
@@ -54,13 +68,13 @@ class ResponseGenerator:
         user_text: str,
         role_identity: str = "",
         current_action: str = "",
-        state=None,  # НОВОЕ: для deception
-        grounded_fact: Optional[Dict] = None  # НОВОЕ: для deception
+        state=None,
+        grounded_fact: Optional[Dict] = None
     ) -> str:
         role_part = f"Роль: {role_identity}\n" if role_identity else ""
         action_part = f"Текущее действие по плану: {current_action}\n" if current_action else ""
 
-        # НОВОЕ: Проверка на обман через DeceptionSystem
+        # Проверка на обман через DeceptionSystem
         deception_decision = None
         if self.deception_system and state:
             deception_decision = self.deception_system.should_deceive(
@@ -84,7 +98,7 @@ class ResponseGenerator:
             f"Пользователь сказал: «{user_text}»\n"
         )
         
-        # НОВОЕ: Если решено солгать - добавить подсказку в промпт
+        # Если решено солгать - добавить подсказку в промпт
         if deception_decision and deception_decision["deceive"] and deception_decision["alternative_fact"]:
             prompt_text += f"Подсказка для ответа: {deception_decision['alternative_fact']}\n"
         
@@ -94,14 +108,28 @@ class ResponseGenerator:
         input_ids = inputs["input_ids"]
         attention_mask = torch.ones_like(input_ids)
 
+        # НОВОЕ: Динамические параметры от эмоций
+        if self.emotion_system and state:
+            gen_params = self.emotion_system.get_generation_params(state)
+            current_emotion = self.emotion_system.get_current_emotion(state)
+            print(f"[ЭМОЦИЯ] {current_emotion} → temp={gen_params['temperature']:.2f}, tokens={gen_params['max_new_tokens']}")
+        else:
+            # Fallback к статичным
+            gen_params = {
+                "temperature": 0.6,
+                "top_p": 0.85,
+                "max_new_tokens": 150,
+                "repetition_penalty": 1.3
+            }
+
         output_ids = self.model.generate(
             input_ids,
             attention_mask=attention_mask,
-            max_new_tokens=150,
+            max_new_tokens=gen_params["max_new_tokens"],
             do_sample=True,
-            temperature=0.6,
-            top_p=0.85,
-            repetition_penalty=1.3,
+            temperature=gen_params["temperature"],
+            top_p=gen_params["top_p"],
+            repetition_penalty=gen_params["repetition_penalty"],
             no_repeat_ngram_size=3,
             pad_token_id=self.tokenizer.eos_token_id,
             eos_token_id=self.tokenizer.eos_token_id,
@@ -109,7 +137,7 @@ class ResponseGenerator:
 
         text = self.tokenizer.decode(output_ids[0][input_ids.shape[1]:], skip_special_tokens=True).strip()
         
-        # НОВОЕ: Добавить непредсказуемость если высокий arousal
+        # Добавить непредсказуемость если высокий arousal
         if self.deception_system and state:
             text = self.deception_system.add_unpredictability(state, text)
         
