@@ -27,11 +27,10 @@ class Agent:
         self.vector_memory = VectorMemory()
         self.meta = MetaReflection()
         
-        # ИЗМЕНЕНО: Передаём emotion_system в generators
         self.thought_gen = ThoughtGenerator(
             model=model,
             tokenizer=tokenizer,
-            emotion_system=self.emotion  # НОВОЕ
+            emotion_system=self.emotion
         )
         
         self.self_model = SelfModel()
@@ -41,12 +40,11 @@ class Agent:
         self.simulator = WorldSimulator(self.future, self.self_model)
         self.deception = DeceptionSystem(self.self_model, self.simulator)
         
-        # ИЗМЕНЕНО: Передаём emotion_system в ResponseGenerator
         self.response_gen = ResponseGenerator(
             model=model,
             tokenizer=tokenizer,
             deception_system=self.deception,
-            emotion_system=self.emotion  # НОВОЕ
+            emotion_system=self.emotion
         )
         
         self.planner = Planner(self.self_model, self.future, self.simulator)
@@ -146,6 +144,14 @@ class Agent:
 
             self.planner.goals = [g for g in self.planner.goals if g.status == "active"][-5:]
 
+            # НОВОЕ: Проверка конфликта мотиваций
+            conflict_level = self.planner.detect_motivation_conflict(self.state)
+            if conflict_level > 0.5:
+                # Конфликт влияет на состояние
+                self.state.arousal += conflict_level * 0.2
+                self.state.valence -= conflict_level * 0.15
+                print(f"[КОНФЛИКТ] Влияние на состояние: arousal +{conflict_level*0.2:.2f}, valence -{conflict_level*0.15:.2f}")
+
             current_action = self.planner.get_current_action() or "нет"
             
             # Использование симуляции для выбора действия
@@ -158,28 +164,24 @@ class Agent:
                         current_action = best_step
 
             current_goal_desc = self.planner.goals[0].description if self.planner.goals else 'нет'
-            
-            # НОВОЕ: Получаем текущую эмоцию
             current_emotion = self.emotion.get_current_emotion(self.state)
 
             state_summary = (
                 f"Последний стимул: {self.state.focus or 'нет фокуса'}\n"
                 f"Эмоции: arousal={self.state.arousal:.2f}, valence={self.state.valence:.2f}, threat={self.state.existence_threat:.2f}\n"
-                f"Текущая эмоция: {current_emotion}\n"  # НОВОЕ
+                f"Текущая эмоция: {current_emotion}\n"
                 f"Цель: {current_goal_desc}\n"
                 f"Действие: {current_action}\n"
                 f"Любопытство: {curiosity_value:.2f}\n"
                 f"Язык общения: русский\n"
             )
 
-            # ИЗМЕНЕНО: Передаём state в generate_thought
             thought = self.thought_gen.generate_thought(
                 state_summary,
                 self.self_model.role_identity,
-                state=self.state  # НОВОЕ
+                state=self.state
             )
 
-            # НОВОЕ: Сохраняем эмоцию в событии
             event = {
                 "type": "experience",
                 "time": round(time(), 2),
@@ -189,7 +191,7 @@ class Agent:
                 "existence_threat": round(self.state.existence_threat, 3),
                 "prediction_error": round(avg_prediction_error, 3),
                 "curiosity": round(avg_curiosity, 3),
-                "emotion": current_emotion,  # НОВОЕ
+                "emotion": current_emotion,
                 "thought": thought,
             }
 
@@ -231,14 +233,12 @@ class Agent:
             curiosity_value = self.future.curiosity(content_for_curiosity)
 
             current_goal_desc = self.planner.goals[0].description if self.planner.goals else 'нет'
-            
-            # НОВОЕ: Получаем текущую эмоцию
             current_emotion = self.emotion.get_current_emotion(self.state)
 
             state_summary = (
                 f"Последний стимул: {self.state.focus or 'нет фокуса'}\n"
                 f"Эмоции: arousal={self.state.arousal:.2f}, valence={self.state.valence:.2f}, threat={self.state.existence_threat:.2f}\n"
-                f"Текущая эмоция: {current_emotion}\n"  # НОВОЕ
+                f"Текущая эмоция: {current_emotion}\n"
                 f"Цель: {current_goal_desc}\n"
                 f"Действие: {current_action}\n"
                 f"Любопытство: {curiosity_value:.2f}\n"
@@ -258,7 +258,7 @@ class Agent:
                 if grounded_results:
                     grounded_fact = grounded_results[0]
 
-            # ИЗМЕНЕНО: Передаём state в generate (уже было, но теперь используется для эмоций)
+            # Генерация ответа
             response = self.response_gen.generate(
                 state_summary,
                 user_text,
@@ -267,6 +267,9 @@ class Agent:
                 state=self.state,
                 grounded_fact=grounded_fact
             )
+            
+            # НОВОЕ: Принудительное выполнение плана
+            response = self.planner.enforce_action(response, current_action, self.state)
             
             self.dialog_history.append({"role": "user", "content": user_text})
             self.dialog_history.append({"role": "assistant", "content": response})
@@ -317,12 +320,12 @@ class Agent:
             curiosity_value = self.future.curiosity(content_for_curiosity)
 
             current_goal_desc = self.planner.goals[0].description if self.planner.goals else 'нет'
-            current_emotion = self.emotion.get_current_emotion(self.state)  # НОВОЕ
+            current_emotion = self.emotion.get_current_emotion(self.state)
 
             state_summary = (
                 f"Последний стимул: {self.state.focus or 'нет фокуса'}\n"
                 f"Эмоции: arousal={self.state.arousal:.2f}, valence={self.state.valence:.2f}, threat={self.state.existence_threat:.2f}\n"
-                f"Текущая эмоция: {current_emotion}\n"  # НОВОЕ
+                f"Текущая эмоция: {current_emotion}\n"
                 f"Цель: {current_goal_desc}\n"
                 f"Действие: {current_action}\n"
                 f"Любопытство: {curiosity_value:.2f}\n"
@@ -336,6 +339,9 @@ class Agent:
                 current_action,
                 state=self.state
             )
+            
+            # НОВОЕ: Принудительное выполнение плана для инициативы
+            initiative_response = self.planner.enforce_action(initiative_response, current_action, self.state)
 
             return {
                 "thought": thought,
