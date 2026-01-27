@@ -166,10 +166,13 @@ class IntegratedMemorySystem:
         importance = (abs(valence) * 0.4 + arousal * 0.3 + prediction_error * 0.3)
         importance = min(1.0, importance)
         
-        # 2. Создать MemoryItem
+        # 2. Создать MemoryItem - ИСПРАВЛЕНО: защита от None
+        content = event.get("focus", "") or ""
+        emotion = event.get("emotion", "neutral") or "neutral"
+        
         memory_item = MemoryItem(
-            content=event.get("focus", ""),
-            emotion=event.get("emotion", "neutral"),
+            content=content,
+            emotion=emotion,
             valence=valence,
             arousal=arousal,
             timestamp=time(),
@@ -193,15 +196,21 @@ class IntegratedMemorySystem:
         """
         Получить контекст для генерации мысли
         Комбинирует Working + релевантные из Short-term + Long-term
+        ИСПРАВЛЕНО: защита от None значений
         """
         # Working memory (самое свежее)
         working_context = self.working.get_context()
         
         context_parts = []
         
-        # Последние 3 из Working
+        # Последние 3 из Working с защитой от None
         for item in working_context:
-            context_parts.append(f"- {item.content[:50]} ({item.emotion})")
+            # Проверка на None для безопасности
+            content = item.content if item.content else "нет содержимого"
+            emotion = item.emotion if item.emotion else "neutral"
+            # Обрезаем только если есть содержимое
+            display_content = content[:50] if len(content) > 50 else content
+            context_parts.append(f"- {display_content} ({emotion})")
         
         return "\n".join(context_parts) if context_parts else "Нет активного контекста"
     
@@ -213,6 +222,18 @@ class IntegratedMemorySystem:
             "working": [item for item in self.working.items if query.lower() in item.content.lower()],
             "short_term": self.short_term.search(query, k=3),
             "long_term": self.long_term.recall_similar(query, k=2)
+        }
+    
+    def get_stats(self) -> Dict:
+        """
+        НОВОЕ: Получить статистику памяти
+        """
+        return {
+            "working_memory": len(self.working.items),
+            "short_term_memory": len(self.short_term.items),
+            "long_term_episodic": len(self.long_term.episodic),
+            "long_term_patterns": len(self.long_term.patterns),
+            "long_term_semantic": len(self.long_term.semantic)
         }
     
     def end_session(self):
