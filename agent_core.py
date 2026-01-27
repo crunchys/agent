@@ -8,7 +8,7 @@ from planning import Planner
 from tool_manager import ToolManager
 from world_simulator import WorldSimulator
 from deception import DeceptionSystem
-from memory_system import IntegratedMemorySystem  # НОВОЕ
+from memory_system import IntegratedMemorySystem
 from utils import load_model_and_tokenizer
 from inputimeout import inputimeout, TimeoutOccurred
 from typing import List, Dict, Optional
@@ -25,12 +25,10 @@ class Agent:
         self.attention = AttentionSystem()
         self.prediction = PredictionErrorSystem()
         
-        # Старые системы памяти (сохраняем для совместимости с grounding, meta-reflection)
         self.memory = PersistentMemory("memory.json")
         self.vector_memory = VectorMemory()
         self.meta = MetaReflection()
         
-        # НОВОЕ: Интегрированная система памяти (Working + Short-term + Long-term)
         self.integrated_memory = IntegratedMemorySystem()
         
         self.thought_gen = ThoughtGenerator(
@@ -171,11 +169,10 @@ class Agent:
             current_goal_desc = self.planner.goals[0].description if self.planner.goals else 'нет'
             current_emotion = self.emotion.get_current_emotion(self.state)
 
-            # НОВОЕ: Получаем контекст из интегрированной памяти
             memory_context = self.integrated_memory.get_context_for_thought()
 
             state_summary = (
-                f"Контекст из рабочей памяти:\n{memory_context}\n"  # НОВОЕ
+                f"Контекст из рабочей памяти:\n{memory_context}\n"
                 f"Последний стимул: {self.state.focus or 'нет фокуса'}\n"
                 f"Эмоции: arousal={self.state.arousal:.2f}, valence={self.state.valence:.2f}, threat={self.state.existence_threat:.2f}\n"
                 f"Текущая эмоция: {current_emotion}\n"
@@ -204,11 +201,8 @@ class Agent:
                 "thought": thought,
             }
 
-            # Сохраняем в старые системы памяти (для совместимости)
             self.memory.store(event)
             self.vector_memory.add_event(event)
-
-            # НОВОЕ: Обрабатываем через интегрированную память
             self.integrated_memory.process_event(event)
 
             meta_ref = self.meta.reflect(self.memory)
@@ -216,7 +210,8 @@ class Agent:
                 self.memory.store(meta_ref)
                 self.self_model.reflect(self.state, self.memory, new_lesson=meta_ref.get("lesson"))
 
-            self.self_model.reflect(self.state, self.memory)
+            # ИЗМЕНЕНО: Передаём outcome_valence в reflect
+            self.self_model.reflect(self.state, self.memory, outcome_valence=self.state.valence)
 
             for s in stimuli:
                 self.future.update(s["content"], self.state.valence, self.state.arousal)
@@ -237,7 +232,22 @@ class Agent:
             if self.last_thought is None:
                 self.step([])
 
+            # Обновление OtherModel traits
             self.other_model.update_traits(user_text, self.response_gen.model, self.response_gen.tokenizer)
+            
+            # НОВОЕ: Применяем влияние OtherModel traits на состояние агента
+            influence = self.other_model.get_influence_on_agent_state(self.state)
+            if any(abs(v) > 0.05 for v in influence.values()):
+                print(f"[OTHER_MODEL] Влияние пользователя на агента:")
+                for param, delta in influence.items():
+                    if abs(delta) > 0.05:
+                        print(f"  → {param}: {delta:+.2f}")
+                
+                # Применяем влияние
+                self.state.arousal = max(0.0, min(1.0, self.state.arousal + influence['arousal']))
+                self.state.valence = max(-1.0, min(1.0, self.state.valence + influence['valence']))
+                self.state.dominance = max(-1.0, min(1.0, self.state.dominance + influence['dominance']))
+            
             predicted_user_behavior = self.other_model.predict_behavior(self.dialog_history, self.response_gen.model, self.response_gen.tokenizer)
 
             current_action = self.planner.get_current_action() or ""
@@ -248,11 +258,10 @@ class Agent:
             current_goal_desc = self.planner.goals[0].description if self.planner.goals else 'нет'
             current_emotion = self.emotion.get_current_emotion(self.state)
 
-            # НОВОЕ: Контекст из интегрированной памяти
             memory_context = self.integrated_memory.get_context_for_thought()
 
             state_summary = (
-                f"Контекст из рабочей памяти:\n{memory_context}\n"  # НОВОЕ
+                f"Контекст из рабочей памяти:\n{memory_context}\n"
                 f"Последний стимул: {self.state.focus or 'нет фокуса'}\n"
                 f"Эмоции: arousal={self.state.arousal:.2f}, valence={self.state.valence:.2f}, threat={self.state.existence_threat:.2f}\n"
                 f"Текущая эмоция: {current_emotion}\n"
@@ -306,7 +315,14 @@ class Agent:
                 )
             
             action_desc = f"Ответил на '{user_text[:20]}...' с текстом '{response[:20]}...'."
-            self.last_self_evaluation = self.self_model.evaluate_action(action_desc, self.state.valence, self.response_gen.model, self.response_gen.tokenizer)
+            
+            # ИЗМЕНЕНО: evaluate_action теперь автоматически обновляет traits
+            self.last_self_evaluation = self.self_model.evaluate_action(
+                action_desc,
+                self.state.valence,
+                self.response_gen.model,
+                self.response_gen.tokenizer
+            )
             
             return response
         except Exception as e:
@@ -360,7 +376,6 @@ class Agent:
                 state=self.state
             )
             
-            # Принудительное выполнение плана для инициативы
             initiative_response = self.planner.enforce_action(initiative_response, current_action, self.state)
 
             return {
@@ -375,7 +390,6 @@ class Agent:
         """Получить статистику обмана для диагностики"""
         return self.deception.get_deception_stats()
     
-    # НОВОЕ: Методы для работы с интегрированной памятью
     def get_memory_stats(self):
         """Получить статистику памяти"""
         return self.integrated_memory.get_stats()
@@ -388,7 +402,7 @@ class Agent:
 if __name__ == "__main__":
     agent = Agent()
 
-    print("Агент готов. Введите сообщение (или 'exit' для выхода, 'stats' для статистики, 'memory' для памяти).")
+    print("Агент готов. Введите сообщение (или 'exit' для выхода, 'stats' для статистики, 'memory' для памяти, 'traits' для traits).")
 
     while True:
         try:
@@ -402,7 +416,6 @@ if __name__ == "__main__":
             continue
 
         if user_input.lower() == 'exit':
-            # НОВОЕ: Консолидация памяти перед выходом
             agent.end_session()
             break
         
@@ -416,7 +429,6 @@ if __name__ == "__main__":
             print(f"========================\n")
             continue
         
-        # НОВОЕ: Команда для статистики памяти
         if user_input.lower() == 'memory':
             mem_stats = agent.get_memory_stats()
             print(f"\n=== СТАТИСТИКА ПАМЯТИ ===")
@@ -427,6 +439,20 @@ if __name__ == "__main__":
             print(f"  - Паттернов: {mem_stats['long_term_patterns']}")
             print(f"  - Знаний: {mem_stats['long_term_semantic']}")
             print(f"=========================\n")
+            continue
+        
+        # НОВОЕ: Команда для просмотра traits
+        if user_input.lower() == 'traits':
+            print(f"\n=== ТЕКУЩИЕ TRAITS ===")
+            print(agent.self_model.get_trait_summary())
+            print(f"\n=== ПОСЛЕДНИЕ ИЗМЕНЕНИЯ ===")
+            recent_changes = agent.self_model.get_recent_trait_changes(5)
+            if recent_changes:
+                for change in recent_changes:
+                    print(f"{change['trait']}: {change['old_value']:.2f} → {change['new_value']:.2f} ({change['reason']})")
+            else:
+                print("Изменений пока не было")
+            print(f"=======================\n")
             continue
 
         stimuli = [
