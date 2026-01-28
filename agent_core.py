@@ -15,6 +15,8 @@ from typing import List, Dict, Optional
 import random
 from time import time
 import torch
+
+# НОВОЕ: Import Global Workspace
 from global_workspace import (
     GlobalWorkspace,
     EmotionSystemAdapter,
@@ -67,6 +69,58 @@ class Agent:
         self.dialog_history: List[Dict[str, str]] = []
         self.current_curiosity: float = 0.0
         self.last_deception_decision = None
+        
+        # НОВОЕ: Global Workspace
+        print("[AGENT] Инициализация Global Workspace...")
+        self.global_workspace = GlobalWorkspace(
+            threshold=0.5,
+            capacity=3,
+            integration_weight=0.7
+        )
+        self._setup_global_workspace()
+        
+        # Для отслеживания prediction error между циклами
+        self.last_prediction_error = 0.0
+    
+    # НОВОЕ: Метод настройки Global Workspace
+    def _setup_global_workspace(self):
+        """Настройка Global Workspace - регистрация систем"""
+        
+        # Emotion system
+        emotion_adapter = EmotionSystemAdapter(
+            emotion_system=self.emotion,
+            mental_state=self.state
+        )
+        self.global_workspace.register_system(emotion_adapter)
+        
+        # Memory system
+        memory_adapter = MemorySystemAdapter(
+            memory_system=self.integrated_memory
+        )
+        self.global_workspace.register_system(memory_adapter)
+        
+        # Planning system
+        planner_adapter = PlannerAdapter(
+            planner=self.planner
+        )
+        self.global_workspace.register_system(planner_adapter)
+        
+        # Attention system
+        attention_adapter = AttentionSystemAdapter(
+            attention_system=self.attention,
+            state=self.state
+        )
+        self.global_workspace.register_system(attention_adapter)
+        
+        # Prediction system
+        self.prediction_adapter = PredictionSystemAdapter(
+            prediction_system=self.prediction,
+            future_system=self.future,
+            current_prediction_error=0.0
+        )
+        self.global_workspace.register_system(self.prediction_adapter)
+        
+        print("[AGENT] ✓ Global Workspace готов")
 
     def step(self, stimuli: List[Dict]):
         try:
@@ -176,17 +230,40 @@ class Agent:
                     if best_step:
                         current_action = best_step
 
+            # ========== НОВОЕ: Global Workspace cycle ==========
+            
+            # Подготовить контекст для workspace
+            context = {
+                "stimuli": stimuli,
+                "time": time(),
+                "user_text": stimuli[0]["content"] if stimuli else "",
+            }
+            
+            # Обновить prediction error для адаптера
+            self.prediction_adapter.current_prediction_error = avg_prediction_error
+            
+            # Запустить цикл Global Workspace
+            workspace_state = self.global_workspace.process_cycle(context)
+            
+            # ========== ИЗМЕНЕНО: state_summary использует workspace ==========
+            
+            # Получить интегрированное состояние
+            workspace_summary = create_workspace_summary(workspace_state)
+            
+            # Детали для совместимости
             current_goal_desc = self.planner.goals[0].description if self.planner.goals else 'нет'
             current_emotion = self.emotion.get_current_emotion(self.state)
-
             memory_context = self.integrated_memory.get_context_for_thought()
 
             state_summary = (
+                f"=== ИНТЕГРИРОВАННОЕ СОСТОЯНИЕ СОЗНАНИЯ (Global Workspace) ===\n"
+                f"{workspace_summary}\n\n"
+                f"=== ДЕТАЛЬНАЯ ИНФОРМАЦИЯ ===\n"
                 f"Контекст из рабочей памяти:\n{memory_context}\n"
                 f"Последний стимул: {self.state.focus or 'нет фокуса'}\n"
-                f"Эмоции: arousal={self.state.arousal:.2f}, valence={self.state.valence:.2f}, threat={self.state.existence_threat:.2f}\n"
+                f"Локальное эмоциональное состояние: arousal={self.state.arousal:.2f}, valence={self.state.valence:.2f}, threat={self.state.existence_threat:.2f}\n"
                 f"Текущая эмоция: {current_emotion}\n"
-                f"Цель: {current_goal_desc}\n"
+                f"Текущая цель: {current_goal_desc}\n"
                 f"Действие: {current_action}\n"
                 f"Любопытство: {curiosity_value:.2f}\n"
                 f"Язык общения: русский\n"
@@ -268,9 +345,20 @@ class Agent:
             current_goal_desc = self.planner.goals[0].description if self.planner.goals else 'нет'
             current_emotion = self.emotion.get_current_emotion(self.state)
 
+            # ========== НОВОЕ: Использовать workspace state ==========
+            
+            # Получить текущее состояние workspace
+            if self.global_workspace.current_state:
+                workspace_summary = create_workspace_summary(self.global_workspace.current_state)
+            else:
+                workspace_summary = "Нет интегрированного состояния"
+            
             memory_context = self.integrated_memory.get_context_for_thought()
 
             state_summary = (
+                f"=== ИНТЕГРИРОВАННОЕ СОСТОЯНИЕ СОЗНАНИЯ (Global Workspace) ===\n"
+                f"{workspace_summary}\n\n"
+                f"=== ДЕТАЛЬНАЯ ИНФОРМАЦИЯ ===\n"
                 f"Контекст из рабочей памяти:\n{memory_context}\n"
                 f"Последний стимул: {self.state.focus or 'нет фокуса'}\n"
                 f"Эмоции: arousal={self.state.arousal:.2f}, valence={self.state.valence:.2f}, threat={self.state.existence_threat:.2f}\n"
@@ -365,9 +453,18 @@ class Agent:
             current_goal_desc = self.planner.goals[0].description if self.planner.goals else 'нет'
             current_emotion = self.emotion.get_current_emotion(self.state)
 
+            # НОВОЕ: Использовать workspace state
+            if self.global_workspace.current_state:
+                workspace_summary = create_workspace_summary(self.global_workspace.current_state)
+            else:
+                workspace_summary = "Нет интегрированного состояния"
+            
             memory_context = self.integrated_memory.get_context_for_thought()
 
             state_summary = (
+                f"=== ИНТЕГРИРОВАННОЕ СОСТОЯНИЕ СОЗНАНИЯ (Global Workspace) ===\n"
+                f"{workspace_summary}\n\n"
+                f"=== ДЕТАЛЬНАЯ ИНФОРМАЦИЯ ===\n"
                 f"Контекст из рабочей памяти:\n{memory_context}\n"
                 f"Последний стимул: {self.state.focus or 'нет фокуса'}\n"
                 f"Эмоции: arousal={self.state.arousal:.2f}, valence={self.state.valence:.2f}, threat={self.state.existence_threat:.2f}\n"
@@ -412,7 +509,7 @@ class Agent:
 if __name__ == "__main__":
     agent = Agent()
 
-    print("Агент готов. Введите сообщение (или 'exit' для выхода, 'stats' для статистики, 'memory' для памяти, 'traits' для traits).")
+    print("Агент готов. Введите сообщение (или 'exit' для выхода, 'stats' для статистики, 'memory' для памяти, 'traits' для traits, 'gw' для Global Workspace).")
 
     while True:
         try:
@@ -463,6 +560,21 @@ if __name__ == "__main__":
             else:
                 print("Изменений пока не было")
             print(f"=======================\n")
+            continue
+        
+        # НОВОЕ: Команда для Global Workspace
+        if user_input.lower() == 'gw' or user_input.lower() == 'workspace':
+            # Статистика Global Workspace
+            print_workspace_stats(agent.global_workspace)
+            
+            # История
+            integration_history = agent.global_workspace.get_integration_history(5)
+            consciousness_history = agent.global_workspace.get_consciousness_history(5)
+            
+            print("\n📊 История (последние 5 циклов):")
+            print(f"Integration:    {[f'{x:.2f}' for x in integration_history]}")
+            print(f"Consciousness:  {[f'{x:.2f}' for x in consciousness_history]}")
+            print()
             continue
 
         stimuli = [
