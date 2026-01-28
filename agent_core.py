@@ -15,6 +15,16 @@ from typing import List, Dict, Optional
 import random
 from time import time
 import torch
+from global_workspace import (
+    GlobalWorkspace,
+    EmotionSystemAdapter,
+    MemorySystemAdapter,
+    PlannerAdapter,
+    AttentionSystemAdapter,
+    PredictionSystemAdapter,
+    create_workspace_summary,
+    print_workspace_stats
+)
 
 class Agent:
     def __init__(self, hf_token=None):
