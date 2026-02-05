@@ -76,9 +76,10 @@ def load_model_and_tokenizer(
         print(f"\n[4/6] Определение стратегии загрузки...")
         
         # Оценка необходимой памяти для 14B в 4-bit
-        estimated_vram = 7.5 if use_4bit else 14.0
+        # На практике нужно больше чем теоретический минимум
+        estimated_vram = 8.0 if use_4bit else 14.0
         
-        if not use_cpu_offload and gpu_memory >= estimated_vram:
+        if not use_cpu_offload and gpu_memory >= estimated_vram + 0.5:  # +0.5GB запас
             strategy = "gpu_only"
             print(f"✓ Стратегия: GPU ONLY (нужно ~{estimated_vram:.1f}GB, доступно {gpu_memory:.1f}GB)")
         else:
@@ -94,7 +95,22 @@ def load_model_and_tokenizer(
         print()
         
         if strategy == "gpu_only":
-            model = _load_gpu_only(model_name, hf_token, use_4bit)
+            try:
+                model = _load_gpu_only(model_name, hf_token, use_4bit)
+            except (ValueError, RuntimeError) as e:
+                if "dispatched on the CPU" in str(e) or "out of memory" in str(e).lower():
+                    print("\n⚠️  Модель не влезла в GPU! Переключаюсь на CPU offloading...")
+                    print("    Генерация будет медленнее (~2x), но работать будет.\n")
+                    strategy = "cpu_offload"  # Переключаемся
+                    model = _load_with_offload(
+                        model_name, 
+                        hf_token, 
+                        use_4bit,
+                        gpu_memory_limit,
+                        cpu_memory_limit
+                    )
+                else:
+                    raise  # Другая ошибка - пробрасываем
         else:
             model = _load_with_offload(
                 model_name, 
@@ -137,6 +153,7 @@ def _load_gpu_only(model_name, hf_token, use_4bit):
             bnb_4bit_compute_dtype=torch.float16,
             bnb_4bit_quant_type="nf4",
             bnb_4bit_use_double_quant=True,
+            llm_int8_enable_fp32_cpu_offload=True,  # НОВОЕ: разрешить CPU offload если нужно
         )
         
         model = AutoModelForCausalLM.from_pretrained(
@@ -184,6 +201,7 @@ def _load_with_offload(model_name, hf_token, use_4bit, gpu_limit, cpu_limit):
             bnb_4bit_compute_dtype=torch.float16,
             bnb_4bit_quant_type="nf4",
             bnb_4bit_use_double_quant=True,
+            llm_int8_enable_fp32_cpu_offload=True,  # НОВОЕ: критично для offload
         )
         
         model = AutoModelForCausalLM.from_pretrained(
