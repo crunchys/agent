@@ -1,117 +1,91 @@
-import torch
-from exllamav2 import ExLlamaV2, ExLlamaV2Config, ExLlamaV2Cache, ExLlamaV2Tokenizer
-from exllamav2.generator import ExLlamaV2StreamingGenerator, ExLlamaV2Sampler
-from huggingface_hub import snapshot_download
+from llama_cpp import Llama
 import os
 
-class ExLlamaWrapper:
-    """Обёртка для совместимости с существующим кодом"""
+def load_model_and_tokenizer(
+    model_path="qwen2.5-14b-instruct-q4_k_m.gguf",
+    n_gpu_layers=35,  # Сколько слоев на GPU (-1 = все)
+    n_ctx=4096,       # Размер контекста
+    n_threads=8,      # CPU threads
+    verbose=True
+):
+    """
+    Загрузка GGUF модели через llama.cpp
     
-    def __init__(self, model, tokenizer, generator, cache):
-        self._model = model
-        self._tokenizer = tokenizer
-        self._generator = generator
-        self._cache = cache
-        self.device = torch.device("cuda")
-    
-    def generate(self, input_ids, attention_mask=None, max_new_tokens=100, 
-                 do_sample=True, temperature=0.7, top_p=0.9, **kwargs):
-        """Совместимость с transformers API"""
-        # Декодируем input_ids обратно в текст
-        prompt = self._tokenizer.decode(input_ids[0].tolist())
+    Преимущества vs transformers:
+    - Меньше памяти (~2-3x)
+    - Быстрее генерация
+    - Проще использовать
+    """
+    try:
+        print("=" * 70)
+        print("ЗАГРУЗКА МОДЕЛИ: llama.cpp")
+        print("=" * 70)
+        print(f"Модель: {model_path}")
+        print(f"GPU layers: {n_gpu_layers}")
+        print(f"Context size: {n_ctx}")
+        print()
         
-        # Настройки семплера
-        settings = ExLlamaV2Sampler.Settings()
-        settings.temperature = temperature
-        settings.top_p = top_p
+        if not os.path.exists(model_path):
+            print(f"❌ Файл модели не найден: {model_path}")
+            print("\nСкачай модель:")
+            print("https://huggingface.co/Qwen/Qwen2.5-14B-Instruct-GGUF")
+            raise FileNotFoundError(f"Model not found: {model_path}")
         
-        # Генерация
-        self._generator.warmup()
-        output = self._generator.generate_simple(
-            prompt,
-            settings,
-            max_new_tokens,
-            seed=None
+        print("Загрузка модели...")
+        llm = Llama(
+            model_path=model_path,
+            n_gpu_layers=n_gpu_layers,  # -1 = все на GPU
+            n_ctx=n_ctx,
+            n_threads=n_threads,
+            verbose=verbose,
+            n_batch=512,
         )
         
-        # Кодируем обратно в токены для совместимости
-        output_ids = self._tokenizer.encode(output)
-        return torch.tensor([output_ids], device=self.device)
-    
-    def eval(self):
-        pass
+        print("✓ Модель загружена")
+        print("=" * 70)
+        
+        # llama-cpp не использует отдельный tokenizer
+        # возвращаем llm дважды для совместимости
+        return llm, llm
+        
+    except Exception as e:
+        print(f"❌ Ошибка загрузки: {e}")
+        raise
 
+# Для совместимости с агентом
+class LlamaCppTokenizer:
+    """Обёртка для совместимости с transformers API"""
+    def __init__(self, llm):
+        self.llm = llm
+        self.eos_token = "</s>"
+        self.pad_token = "</s>"
+        self.eos_token_id = 2
+        self.pad_token_id = 2
+    
+    def __call__(self, text, return_tensors=None):
+        # llama-cpp не нужны tensors
+        return {"input_text": text}
+    
+    def decode(self, tokens, skip_special_tokens=True):
+        # Для llama-cpp text уже декодирован
+        return tokens if isinstance(tokens, str) else ""
 
-class ExLlamaTokenizerWrapper:
-    """Обёртка токенизатора для совместимости"""
+if __name__ == "__main__":
+    # Тест
+    model_path = "qwen2.5-14b-instruct-q4_k_m.gguf"
+    llm, _ = load_model_and_tokenizer(model_path)
     
-    def __init__(self, tokenizer):
-        self._tokenizer = tokenizer
-        self.pad_token = "<|endoftext|>"
-        self.eos_token = "<|endoftext|>"
-        self.pad_token_id = tokenizer.eos_token_id
-        self.eos_token_id = tokenizer.eos_token_id
+    print("\nТест генерации...")
+    prompt = "Привет! Как дела?"
     
-    def __call__(self, text, return_tensors="pt", **kwargs):
-        ids = self._tokenizer.encode(text)
-        input_ids = torch.tensor([ids], device="cuda")
-        return {"input_ids": input_ids}
-    
-    def decode(self, ids, skip_special_tokens=True):
-        if isinstance(ids, torch.Tensor):
-            ids = ids.tolist()
-        return self._tokenizer.decode(ids)
-    
-    def encode(self, text):
-        return self._tokenizer.encode(text)
-
-
-def load_model_and_tokenizer(
-    model_name="turboderp/Qwen2.5-14B-Instruct-exl2",  # ExLlamaV2 версия
-    revision="4.0bpw",  # 4-bit, ~8GB
-    hf_token=None
-):
-    """Загрузка ExLlamaV2 модели"""
-    print("=" * 50)
-    print("ЗАГРУЗКА EXLLAMAV2 МОДЕЛИ")
-    print("=" * 50)
-    
-    # Скачиваем модель
-    print(f"Скачивание {model_name} ({revision})...")
-    model_path = snapshot_download(
-        repo_id=model_name,
-        revision=revision,
-        token=hf_token
+    response = llm(
+        prompt,
+        max_tokens=100,
+        temperature=0.7,
+        top_p=0.9,
+        echo=False
     )
-    print(f"Модель в: {model_path}")
     
-    # Конфиг
-    config = ExLlamaV2Config(model_path)
-    config.max_seq_len = 4096
-    
-    # Модель
-    print("Загрузка модели...")
-    model = ExLlamaV2(config)
-    model.load()
-    
-    # Кэш
-    cache = ExLlamaV2Cache(model, max_seq_len=4096, lazy=True)
-    
-    # Токенизатор
-    tokenizer = ExLlamaV2Tokenizer(config)
-    
-    # Генератор
-    generator = ExLlamaV2StreamingGenerator(model, cache, tokenizer)
-    
-    if torch.cuda.is_available():
-        mem_used = torch.cuda.memory_allocated(0) / 1024**3
-        print(f"✓ VRAM использовано: {mem_used:.2f} GB")
-    
-    print("✓ Модель загружена!")
-    print("=" * 50)
-    
-    # Возвращаем обёртки для совместимости
-    model_wrapper = ExLlamaWrapper(model, tokenizer, generator, cache)
-    tokenizer_wrapper = ExLlamaTokenizerWrapper(tokenizer)
-    
-    return model_wrapper, tokenizer_wrapper
+    print(f"\nПромпт: {prompt}")
+    print(f"Ответ: {response['choices'][0]['text']}")
+    print("\n✅ Тест успешен!")
