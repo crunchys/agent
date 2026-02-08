@@ -1,91 +1,74 @@
-from llama_cpp import Llama
+import torch
+from transformers import AutoTokenizer, AutoModelForCausalLM, BitsAndBytesConfig
 import os
 
 def load_model_and_tokenizer(
-    model_path="qwen2.5-14b-instruct-q4_k_m.gguf",
-    n_gpu_layers=35,  # Сколько слоев на GPU (-1 = все)
-    n_ctx=4096,       # Размер контекста
-    n_threads=8,      # CPU threads
-    verbose=True
+    model_name="Qwen/Qwen2.5-14B-Instruct",
+    hf_token=None,
+    use_4bit=True
 ):
-    """
-    Загрузка GGUF модели через llama.cpp
-    
-    Преимущества vs transformers:
-    - Меньше памяти (~2-3x)
-    - Быстрее генерация
-    - Проще использовать
-    """
     try:
         print("=" * 70)
-        print("ЗАГРУЗКА МОДЕЛИ: llama.cpp")
+        print("ЗАГРУЗКА МОДЕЛИ")
         print("=" * 70)
-        print(f"Модель: {model_path}")
-        print(f"GPU layers: {n_gpu_layers}")
-        print(f"Context size: {n_ctx}")
-        print()
+        print(f"Модель: {model_name}")
         
-        if not os.path.exists(model_path):
-            print(f"❌ Файл модели не найден: {model_path}")
-            print("\nСкачай модель:")
-            print("https://huggingface.co/Qwen/Qwen2.5-14B-Instruct-GGUF")
-            raise FileNotFoundError(f"Model not found: {model_path}")
+        if not torch.cuda.is_available():
+            raise RuntimeError("CUDA недоступна")
         
-        print("Загрузка модели...")
-        llm = Llama(
-            model_path=model_path,
-            n_gpu_layers=n_gpu_layers,  # -1 = все на GPU
-            n_ctx=n_ctx,
-            n_threads=n_threads,
-            verbose=verbose,
-            n_batch=512,
+        print(f"GPU: {torch.cuda.get_device_name(0)}")
+        torch.cuda.empty_cache()
+        
+        print("\nЗагрузка токенизатора...")
+        tokenizer = AutoTokenizer.from_pretrained(
+            model_name,
+            trust_remote_code=True,
+            token=hf_token
+        )
+        if tokenizer.pad_token is None:
+            tokenizer.pad_token = tokenizer.eos_token
+        print("✓ Токенизатор загружен")
+        
+        print("\nЗагрузка модели с CPU offloading...")
+        print("⚠️ Это займет 5-10 минут при первом запуске")
+        
+        offload_folder = "offload_cache"
+        os.makedirs(offload_folder, exist_ok=True)
+        
+        max_memory = {
+            0: "6GB",      # GPU
+            "cpu": "12GB"  # CPU
+        }
+        
+        quantization_config = BitsAndBytesConfig(
+            load_in_4bit=True,
+            bnb_4bit_compute_dtype=torch.float16,
+            bnb_4bit_quant_type="nf4",
+            bnb_4bit_use_double_quant=True,
+            llm_int8_enable_fp32_cpu_offload=True,
+        )
+        
+        model = AutoModelForCausalLM.from_pretrained(
+            model_name,
+            quantization_config=quantization_config,
+            device_map="auto",
+            trust_remote_code=True,
+            token=hf_token,
+            low_cpu_mem_usage=True,
+            max_memory=max_memory,
+            offload_folder=offload_folder,
+            offload_state_dict=True,
         )
         
         print("✓ Модель загружена")
+        model.eval()
+        
+        allocated = torch.cuda.memory_allocated(0) / 1024**3
+        print(f"\nGPU Memory: {allocated:.2f} GB")
         print("=" * 70)
         
-        # llama-cpp не использует отдельный tokenizer
-        # возвращаем llm дважды для совместимости
-        return llm, llm
+        return model, tokenizer
         
     except Exception as e:
-        print(f"❌ Ошибка загрузки: {e}")
+        print(f"\n❌ ОШИБКА: {e}")
         raise
-
-# Для совместимости с агентом
-class LlamaCppTokenizer:
-    """Обёртка для совместимости с transformers API"""
-    def __init__(self, llm):
-        self.llm = llm
-        self.eos_token = "</s>"
-        self.pad_token = "</s>"
-        self.eos_token_id = 2
-        self.pad_token_id = 2
-    
-    def __call__(self, text, return_tensors=None):
-        # llama-cpp не нужны tensors
-        return {"input_text": text}
-    
-    def decode(self, tokens, skip_special_tokens=True):
-        # Для llama-cpp text уже декодирован
-        return tokens if isinstance(tokens, str) else ""
-
-if __name__ == "__main__":
-    # Тест
-    model_path = "qwen2.5-14b-instruct-q4_k_m.gguf"
-    llm, _ = load_model_and_tokenizer(model_path)
-    
-    print("\nТест генерации...")
-    prompt = "Привет! Как дела?"
-    
-    response = llm(
-        prompt,
-        max_tokens=100,
-        temperature=0.7,
-        top_p=0.9,
-        echo=False
-    )
-    
-    print(f"\nПромпт: {prompt}")
-    print(f"Ответ: {response['choices'][0]['text']}")
-    print("\n✅ Тест успешен!")
