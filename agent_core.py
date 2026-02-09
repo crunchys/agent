@@ -1,6 +1,7 @@
 from mental_state import MentalState
 from systems import EmotionSystem, PredictionErrorSystem, FutureExpectationSystem
 from attention_system import AttentionSystem
+from metacognition import MetacognitionSystem, MetacognitionIntegrator
 from memory_classes import VectorMemory, EpisodicMemory, MetaReflection
 from model_classes import SelfModel, OtherModel
 from generators import ThoughtGenerator, ResponseGenerator
@@ -56,6 +57,7 @@ class Agent:
         
         self.simulator = WorldSimulator(self.future, self.self_model)
         self.deception = DeceptionSystem(self.self_model, self.simulator)
+        self.metacognition = MetacognitionSystem(self.self_model, self.tool_manager)
         
         self.response_gen = ResponseGenerator(
             model=model,
@@ -424,6 +426,12 @@ class Agent:
                 self.response_gen.tokenizer
             )
             
+            if hasattr(self, 'metacognition'):
+                response = MetacognitionIntegrator.process_with_metacognition(
+                    self, user_text, response, 
+                    grounded_results if 'grounded_results' in locals() else None
+                )
+
             return response
         except Exception as e:
             print(f"Ошибка в respond: {e}")
