@@ -1,5 +1,6 @@
 from typing import List, Dict, Optional
 from collections import Counter
+from attention_system import AttentionSystem
 
 class EmotionSystem:
     def __init__(self, decay_rate: float = 0.05):
