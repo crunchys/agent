@@ -1,6 +1,5 @@
 from typing import List, Dict, Optional
 from collections import Counter
-from attention_system import AttentionSystem
 
 class EmotionSystem:
     def __init__(self, decay_rate: float = 0.05):
@@ -140,16 +139,6 @@ class PredictionErrorSystem:
         freq = self.history[content] / total if total > 0 else 0.0
         prediction_error = 1.0 - freq
         return round(prediction_error, 3)
-
-class AttentionSystem:
-    def __init__(self, threshold: float = 0.4):
-        self.threshold = threshold
-
-    def select_focus(self, stimuli: List[Dict]) -> Optional[str]:
-        if not stimuli:
-            return None
-        best = max(stimuli, key=lambda s: s["salience"])
-        return best["content"] if best["salience"] >= self.threshold else None
 
 class FutureExpectationSystem:
     def __init__(self):
