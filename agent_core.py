@@ -179,7 +179,8 @@ class Agent:
             for s in stimuli:
                 self.emotion.apply_stimulus(self.state, s)
 
-            self.state.focus = self.attention.select_focus(stimuli)
+            current_goal = self.planner.goals[0].description if self.planner.goals else None
+            self.state.focus = self.attention.select_focus(stimuli, current_goal=current_goal)
 
             last_events = self.memory.recent(5)
 
@@ -591,3 +592,13 @@ if __name__ == "__main__":
 
         response = agent.respond(user_input)
         print(f"Агент: {response}")
+
+        # НОВОЕ: Команда для Attention System
+        if user_input.lower() == 'attention':
+            stats = agent.attention.get_focus_stats()
+            print(f"\n=== ВНИМАНИЕ ===")
+            print(f"Фокус: {stats['current_focus']}")
+            print(f"Длительность: {stats['current_duration']:.1f}s")
+            print(f"Переключений: {stats['switch_count']}")
+            print(f"================\n")
+            continue
