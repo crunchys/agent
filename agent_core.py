@@ -11,6 +11,7 @@ from tool_manager import ToolManager
 from world_simulator import WorldSimulator
 from deception import DeceptionSystem
 from memory_system import IntegratedMemorySystem
+from theory_of_mind import TheoryOfMindSystem
 from utils import load_model_and_tokenizer
 from inputimeout import inputimeout, TimeoutOccurred
 from typing import List, Dict, Optional
@@ -73,6 +74,9 @@ class Agent:
         self.last_deception_decision = None
         
         self.metacognition = MetacognitionSystem(self.self_model, self.tool_manager)
+
+        self.theory_of_mind = TheoryOfMindSystem(self.emotion, self.self_model)
+        print("[AGENT] ✓ Theory of Mind система инициализирована")
 
         # НОВОЕ: Global Workspace
         print("[AGENT] Инициализация Global Workspace...")
@@ -327,6 +331,11 @@ class Agent:
             # Обновление OtherModel traits
             self.other_model.update_traits(user_text, self.response_gen.model, self.response_gen.tokenizer)
             
+            if hasattr(self, 'theory_of_mind'):
+                tom_result = self.theory_of_mind.process_user_input(
+                    user_text, self.state, self.dialog_history
+                )
+
             # НОВОЕ: Применяем влияние OtherModel traits на состояние агента
             influence = self.other_model.get_influence_on_agent_state(self.state)
             if any(abs(v) > 0.05 for v in influence.values()):
@@ -360,6 +369,10 @@ class Agent:
             
             memory_context = self.integrated_memory.get_context_for_thought()
 
+            tom_summary = ""
+            if hasattr(self, 'theory_of_mind'):
+                tom_summary = self.theory_of_mind.get_tom_summary()
+
             state_summary = (
                 f"=== ИНТЕГРИРОВАННОЕ СОСТОЯНИЕ СОЗНАНИЯ (Global Workspace) ===\n"
                 f"{workspace_summary}\n\n"
@@ -372,6 +385,8 @@ class Agent:
                 f"Действие: {current_action}\n"
                 f"Любопытство: {curiosity_value:.2f}\n"
                 f"Честность (honesty): {self.self_model.traits.get('honesty', 0.7):.2f}\n"
+                f"=== THEORY OF MIND (понимание пользователя) ===\n"
+                f"{tom_summary}\n"
                 f"Язык общения: русский\n"
             )
 
@@ -612,3 +627,8 @@ if __name__ == "__main__":
             print(f"Переключений: {stats['switch_count']}")
             print(f"================\n")
             continue
+
+        if user_input.lower() == 'tom':
+            stats = agent.theory_of_mind.get_stats()
+            print(f"Убеждений: {stats['total_beliefs']}")
+            print(f"ToM событий: {stats['tom_events']}")
