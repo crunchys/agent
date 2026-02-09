@@ -57,7 +57,6 @@ class Agent:
         
         self.simulator = WorldSimulator(self.future, self.self_model)
         self.deception = DeceptionSystem(self.self_model, self.simulator)
-        self.metacognition = MetacognitionSystem(self.self_model, self.tool_manager)
         
         self.response_gen = ResponseGenerator(
             model=model,
@@ -73,6 +72,8 @@ class Agent:
         self.current_curiosity: float = 0.0
         self.last_deception_decision = None
         
+        self.metacognition = MetacognitionSystem(self.self_model, self.tool_manager)
+
         # НОВОЕ: Global Workspace
         print("[AGENT] Инициализация Global Workspace...")
         self.global_workspace = GlobalWorkspace(
