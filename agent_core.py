@@ -587,6 +587,23 @@ if __name__ == "__main__":
                 print("Изменений пока не было")
             print(f"=======================\n")
             continue
+
+        
+        # НОВОЕ: Команда для Attention System
+        if user_input.lower() == 'attention':
+            stats = agent.attention.get_focus_stats()
+            print(f"\n=== ВНИМАНИЕ ===")
+            print(f"Фокус: {stats['current_focus']}")
+            print(f"Длительность: {stats['current_duration']:.1f}s")
+            print(f"Переключений: {stats['switch_count']}")
+            print(f"================\n")
+            continue
+        
+        # НОВОЕ: Команда для ToM
+        if user_input.lower() == 'tom':
+            stats = agent.theory_of_mind.get_stats()
+            print(f"Убеждений: {stats['total_beliefs']}")
+            print(f"ToM событий: {stats['tom_events']}")
         
         # НОВОЕ: Команда для Global Workspace
         if user_input.lower() == 'gw' or user_input.lower() == 'workspace':
@@ -617,18 +634,3 @@ if __name__ == "__main__":
 
         response = agent.respond(user_input)
         print(f"Агент: {response}")
-
-        # НОВОЕ: Команда для Attention System
-        if user_input.lower() == 'attention':
-            stats = agent.attention.get_focus_stats()
-            print(f"\n=== ВНИМАНИЕ ===")
-            print(f"Фокус: {stats['current_focus']}")
-            print(f"Длительность: {stats['current_duration']:.1f}s")
-            print(f"Переключений: {stats['switch_count']}")
-            print(f"================\n")
-            continue
-
-        if user_input.lower() == 'tom':
-            stats = agent.theory_of_mind.get_stats()
-            print(f"Убеждений: {stats['total_beliefs']}")
-            print(f"ToM событий: {stats['tom_events']}")
