@@ -1,5 +1,6 @@
 from mental_state import MentalState
-from systems import EmotionSystem, PredictionErrorSystem, AttentionSystem, FutureExpectationSystem
+from systems import EmotionSystem, PredictionErrorSystem, FutureExpectationSystem
+from attention_system import AttentionSystem
 from memory_classes import VectorMemory, EpisodicMemory, MetaReflection
 from model_classes import SelfModel, OtherModel
 from generators import ThoughtGenerator, ResponseGenerator
